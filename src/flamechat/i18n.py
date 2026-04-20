@@ -56,11 +56,13 @@ TRANSLATIONS: dict[str, dict[Language, str]] = {
 
     "status.shortcuts": {
         "de": (
-            "Cmd+1: Chat-Liste · Cmd+2: Nachricht · Cmd+,: Einstellungen · "
+            "Cmd+1: Chat-Liste · Cmd+2: Nachricht · Cmd+3: Modellwahl · "
+            "Cmd+,: Einstellungen · "
             "Ctrl+Cmd+↑/↓: Nachricht davor/danach · Alt+1…0…ß: letzte 11 Nachrichten vorlesen"
         ),
         "en": (
-            "Cmd+1: chat list · Cmd+2: message · Cmd+,: preferences · "
+            "Cmd+1: chat list · Cmd+2: message · Cmd+3: model chooser · "
+            "Cmd+,: preferences · "
             "Ctrl+Cmd+↑/↓: previous/next message · Alt+1…0…-: speak last 11 messages"
         ),
     },
@@ -78,6 +80,10 @@ TRANSLATIONS: dict[str, dict[Language, str]] = {
     "toolbar.model_name_a11y": {
         "de": "Modell für aktuellen Chat",
         "en": "Model for current chat",
+    },
+    "toolbar.model_tooltip": {
+        "de": "Modell für den aktiven Chat wählen (Strg+3)",
+        "en": "Pick the model for the active chat (Ctrl+3)",
     },
     "toolbar.connection_label": {
         "de": "Verbindung: {host} · nur lokal",
@@ -540,6 +546,10 @@ TRANSLATIONS: dict[str, dict[Language, str]] = {
     "say.chat_created": {"de": "Neuer Chat angelegt.", "en": "New chat created."},
     "say.chat_deleted": {"de": "Chat gelöscht.", "en": "Chat deleted."},
     "say.chat_list_focus": {"de": "Chat-Liste: {title}", "en": "Chat list: {title}"},
+    "say.focus_model_chooser": {
+        "de": "Modellwahl.",
+        "en": "Model chooser.",
+    },
     "say.no_messages_in_chat": {
         "de": "Keine Nachrichten in diesem Chat.",
         "en": "No messages in this chat.",

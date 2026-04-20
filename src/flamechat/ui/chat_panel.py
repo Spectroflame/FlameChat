@@ -83,6 +83,22 @@ class _MessageRecord:
     panel: "MessagePanel | None" = field(default=None, repr=False)
 
 
+class _MessageBody(wx.TextCtrl):
+    """Read-only message body that stays out of the Tab ring.
+
+    The transcript is navigated with Ctrl+Up/Down (see _handle_nav_key
+    on ChatPanel), and the Alt+1..0/- shortcuts read recent messages
+    aloud. Tab-stopping on every message would force screen-reader
+    users to page through the whole history before reaching the input,
+    which is the exact opposite of what they want. Overriding
+    AcceptsFocusFromKeyboard drops us from Tab traversal while leaving
+    programmatic SetFocus (the Ctrl+Up/Down target) untouched.
+    """
+
+    def AcceptsFocusFromKeyboard(self):  # noqa: N802 — wx API name
+        return False
+
+
 class MessagePanel(wx.Panel):
     """A single message row: role label + scrollable read-only text box."""
 
@@ -112,7 +128,7 @@ class MessagePanel(wx.Panel):
         self.header.SetName(f"{position_label} {role_text}")
         sizer.Add(self.header, 0, wx.LEFT | wx.RIGHT | wx.TOP, 6)
 
-        self.body = wx.TextCtrl(
+        self.body = _MessageBody(
             self,
             value=content,
             style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2 | wx.TE_AUTO_URL

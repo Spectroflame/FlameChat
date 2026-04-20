@@ -96,10 +96,12 @@ class MainFrame(wx.Frame):
         """Global keyboard shortcuts for focus management and read-back.
 
         ``Cmd+1 / Ctrl+1`` jumps to the chat list; ``Cmd+2 / Ctrl+2`` to
-        the chat input. Explicit shortcuts make the app usable with
-        keyboard and screen readers even on systems where Tab traversal
-        into the sidebar is unreliable (macOS' "Full Keyboard Access"
-        off, for example).
+        the chat input; ``Cmd+3 / Ctrl+3`` to the model chooser in the
+        toolbar. Explicit shortcuts make the app usable with keyboard
+        and screen readers even on systems where Tab traversal into the
+        sidebar or toolbar is unreliable — the splitter traps Tab inside
+        itself on Windows, so NVDA users had no way to reach the model
+        dropdown without a dedicated accelerator.
 
         ``Alt/Option + 1..0 + -`` speak the last 11 messages through the
         screen reader. ``Alt+1`` reads the most recent message, ``Alt+2``
@@ -108,10 +110,12 @@ class MainFrame(wx.Frame):
         """
         self._focus_list_id = wx.NewIdRef().GetId()
         self._focus_input_id = wx.NewIdRef().GetId()
+        self._focus_model_id = wx.NewIdRef().GetId()
 
         entries: list[tuple[int, int, int]] = [
             (wx.ACCEL_CTRL, ord("1"), self._focus_list_id),
             (wx.ACCEL_CTRL, ord("2"), self._focus_input_id),
+            (wx.ACCEL_CTRL, ord("3"), self._focus_model_id),
         ]
 
         # Alt/Option + digit/minus: announce last 11 messages. Keys in
@@ -138,6 +142,91 @@ class MainFrame(wx.Frame):
         self.Bind(
             wx.EVT_MENU, lambda _e: self.chat.input.SetFocus(), id=self._focus_input_id
         )
+        self.Bind(
+            wx.EVT_MENU, lambda _e: self._focus_model_choice(), id=self._focus_model_id
+        )
+
+        # App-wide Tab routing that bridges the toolbar into the natural
+        # Tab ring. Without this, NVDA users (and sighted keyboard users)
+        # hit two problems: Tab from the model dropdown is trapped inside
+        # the toolbar panel — wx.SplitterWindow doesn't forward focus
+        # cleanly on Windows — and Shift+Tab from the chat panes never
+        # climbs out of the splitter to reach the toolbar. We patch both
+        # directions here so Ctrl+3 is a shortcut, not the only way in.
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_global_tab)
+
+    def _focus_model_choice(self) -> None:
+        """Move focus to the model dropdown and announce it.
+
+        NVDA reads the Choice's accessible name + current selection when
+        focus lands on it; the announcer line is a belt-and-braces hint
+        for users who missed the native focus-change event.
+        """
+        if not hasattr(self, "model_choice"):
+            return
+        self.model_choice.SetFocus()
+        if self.announcer is not None:
+            self.announcer.announce(t("say.focus_model_chooser"))
+
+    def _on_global_tab(self, event: wx.KeyEvent) -> None:
+        """Frame-level Tab handler: enforce one explicit Tab ring.
+
+        wxPython's default Tab traversal can't cleanly cross the toolbar
+        / splitter boundary on Windows, so forward Tab and Shift+Tab end
+        up touring different sets of controls. We replace that with one
+        explicit cycle — input → attach → send → list → new → delete →
+        model picker → input — and drive it here via EVT_CHAR_HOOK so
+        both directions always hit the same stops.
+
+        Only acts when the focused widget lives in this frame; modal
+        dialogs have their own TopLevelParent, so their Tab navigation
+        is left alone.
+        """
+        if event.GetKeyCode() != wx.WXK_TAB:
+            event.Skip()
+            return
+        if not hasattr(self, "model_choice"):
+            event.Skip()
+            return
+        focused = wx.Window.FindFocus()
+        if focused is None or focused.GetTopLevelParent() is not self:
+            event.Skip()
+            return
+
+        ring = self._tab_ring()
+        if not ring:
+            event.Skip()
+            return
+
+        if focused in ring:
+            idx = ring.index(focused)
+            offset = -1 if event.ShiftDown() else 1
+            target = ring[(idx + offset) % len(ring)]
+        else:
+            # Focus escaped the ring — most likely on a message body
+            # via Ctrl+Up/Down. Tab returns to the input; Shift+Tab
+            # steps back into the model chooser.
+            target = self.model_choice if event.ShiftDown() else self.chat.input
+        target.SetFocus()
+
+    def _tab_ring(self) -> list[wx.Window]:
+        """Ordered list of controls that participate in the Tab cycle.
+
+        Dynamic: buttons that are hidden (send vs. abort swap during a
+        generation) or disabled (delete with no chat selected) are
+        filtered out so Tab never lands on a dead control.
+        """
+        candidates: list[wx.Window] = [
+            self.chat.input,
+            self.chat.attach_button,
+            self.chat.send_button,
+            self.chat.abort_button,
+            self.chat_list.list,
+            self.chat_list.new_btn,
+            self.chat_list.delete_btn,
+            self.model_choice,
+        ]
+        return [w for w in candidates if w.IsShown() and w.IsEnabled()]
 
     # --- layout -----------------------------------------------------------
     def _build_menu(self) -> None:
@@ -176,16 +265,24 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_about, about)
 
     def _build_toolbar(self) -> None:
-        self.toolbar_panel = wx.Panel(self)
+        # TAB_TRAVERSAL keeps the wx.Choice reachable via Tab once focus
+        # is inside this panel. Cross-panel tab from the splitter is
+        # still unreliable on Windows, which is why Ctrl+3 exists.
+        self.toolbar_panel = wx.Panel(self, style=wx.TAB_TRAVERSAL)
         sizer = wx.BoxSizer(wx.HORIZONTAL)
 
-        label = wx.StaticText(self.toolbar_panel, label=t("toolbar.model_for_chat"))
+        self.model_label = wx.StaticText(
+            self.toolbar_panel, label=t("toolbar.model_for_chat")
+        )
         self.model_choice = wx.Choice(self.toolbar_panel, choices=[])
         self.model_choice.SetName(t("toolbar.model_name_a11y"))
+        # Tooltip announces the shortcut so users who hover (or whose
+        # screen reader reads tooltips) learn Ctrl+3 reaches this control.
+        self.model_choice.SetToolTip(t("toolbar.model_tooltip"))
 
         # Host / loopback info lives in Preferences → About, not the
         # main toolbar — it confused users without adding actionable info.
-        sizer.Add(label, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 8)
+        sizer.Add(self.model_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 8)
         sizer.Add(self.model_choice, 1, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 6)
         self.toolbar_panel.SetSizer(sizer)
 

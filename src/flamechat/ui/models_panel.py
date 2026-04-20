@@ -8,6 +8,7 @@ accessibility are the same; only the containment changed.
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 from typing import Callable
 
 import wx
@@ -18,7 +19,14 @@ from ..backend.ollama_client import (
     OllamaClient,
     OllamaError,
     PullProgress,
+    derive_name_from_url,
+    download_gguf,
+    is_valid_custom_name,
+    is_valid_ollama_id,
+    looks_like_url,
+    normalise_ollama_ref,
 )
+from ..backend.ollama_manager import app_data_dir
 from ..backend.recommendations import ModelSuggestion, recommend
 from ..i18n import t
 from .sounds import SoundBoard
@@ -96,9 +104,48 @@ class ModelsPanel(wx.Panel):
         progress_row.Add(self.progress_label, 0, wx.ALIGN_CENTER_VERTICAL)
         sizer.Add(progress_row, 0, wx.EXPAND | wx.ALL, 10)
 
+        # --- custom model (ID or direct GGUF URL) ---
+        custom_heading = wx.StaticText(self, label=t("models.custom_heading"))
+        f = custom_heading.GetFont()
+        f.SetWeight(wx.FONTWEIGHT_BOLD)
+        custom_heading.SetFont(f)
+        sizer.Add(custom_heading, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+
+        custom_note = wx.StaticText(self, label=t("models.custom_note"))
+        custom_note.Wrap(700)
+        sizer.Add(custom_note, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+
+        id_row = wx.BoxSizer(wx.HORIZONTAL)
+        id_label = wx.StaticText(self, label=t("models.custom_input_label"))
+        # TE_PROCESS_ENTER so Enter inside the field triggers the custom
+        # download action instead of silently escaping to the dialog or
+        # (worse) falling through to the recommended-model pull button.
+        self.custom_input = wx.TextCtrl(self, style=wx.TE_PROCESS_ENTER)
+        self.custom_input.SetHint(t("models.custom_input_hint"))
+        self.custom_input.SetName(t("models.custom_input_name"))
+        id_row.Add(id_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        id_row.Add(self.custom_input, 1, wx.ALIGN_CENTER_VERTICAL)
+        sizer.Add(id_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 10)
+
+        name_row = wx.BoxSizer(wx.HORIZONTAL)
+        name_label = wx.StaticText(self, label=t("models.custom_name_label"))
+        self.custom_name = wx.TextCtrl(self, style=wx.TE_PROCESS_ENTER)
+        self.custom_name.SetHint(t("models.custom_name_hint"))
+        self.custom_name.SetName(t("models.custom_name_a11y"))
+        name_row.Add(name_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        name_row.Add(self.custom_name, 1, wx.ALIGN_CENTER_VERTICAL)
+        sizer.Add(name_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
+
+        self.custom_button = wx.Button(self, label=t("models.custom_button"))
+        self.custom_button.SetName(t("models.custom_button"))
+        sizer.Add(self.custom_button, 0, wx.LEFT | wx.RIGHT | wx.TOP | wx.BOTTOM, 10)
+
         self.SetSizer(sizer)
 
         self.pull_button.Bind(wx.EVT_BUTTON, self._on_pull)
+        self.custom_button.Bind(wx.EVT_BUTTON, self._on_custom)
+        self.custom_input.Bind(wx.EVT_TEXT_ENTER, self._on_custom)
+        self.custom_name.Bind(wx.EVT_TEXT_ENTER, self._on_custom)
 
     # --- public API -------------------------------------------------------
     def refresh_installed(self) -> None:
@@ -129,6 +176,16 @@ class ModelsPanel(wx.Panel):
     def _on_pull(self, _event) -> None:
         idx = self.suggestions_list.GetSelection()
         if idx == wx.NOT_FOUND:
+            # Silent return used to be the norm here, but that made the
+            # adjacent custom-model field confusing — users typed into
+            # the custom input, hit this button (or Enter), and saw
+            # nothing happen. Point them at the right control instead.
+            wx.MessageBox(
+                t("models.pull_no_selection_body"),
+                t("models.pull_no_selection_title"),
+                wx.OK | wx.ICON_INFORMATION,
+                self,
+            )
             return
         suggestion = self._suggestions[idx]
         self.pull_button.Disable()
@@ -177,6 +234,9 @@ class ModelsPanel(wx.Panel):
         self.progress.SetValue(1000)
         self.progress_label.SetLabel(t("models.pull_done", model=model))
         self.pull_button.Enable()
+        self.custom_button.Enable()
+        self.custom_input.SetValue("")
+        self.custom_name.SetValue("")
         self.refresh_installed()
         self._on_models_changed()
 
@@ -184,6 +244,7 @@ class ModelsPanel(wx.Panel):
         if self._sounds is not None:
             self._sounds.stop_click_metronome()
         self.pull_button.Enable()
+        self.custom_button.Enable()
         self.progress_label.SetLabel(t("chat.error", err=err))
         wx.MessageBox(
             t("models.pull_error_body", err=err),
@@ -191,6 +252,166 @@ class ModelsPanel(wx.Panel):
             wx.OK | wx.ICON_ERROR,
             self,
         )
+
+    # --- custom download flow ---------------------------------------------
+    def _on_custom(self, _event) -> None:
+        raw = self.custom_input.GetValue().strip()
+        name_raw = self.custom_name.GetValue().strip()
+        if not raw:
+            wx.MessageBox(
+                t("models.custom_empty_body"),
+                t("models.custom_invalid_title"),
+                wx.OK | wx.ICON_INFORMATION,
+                self,
+            )
+            self.custom_input.SetFocus()
+            return
+
+        if looks_like_url(raw):
+            if not raw.lower().endswith(".gguf"):
+                wx.MessageBox(
+                    t("models.custom_not_gguf_body"),
+                    t("models.custom_invalid_title"),
+                    wx.OK | wx.ICON_WARNING,
+                    self,
+                )
+                self.custom_input.SetFocus()
+                return
+            name = name_raw or derive_name_from_url(raw)
+            if not is_valid_custom_name(name):
+                wx.MessageBox(
+                    t("models.custom_bad_name_body"),
+                    t("models.custom_invalid_title"),
+                    wx.OK | wx.ICON_WARNING,
+                    self,
+                )
+                self.custom_name.SetFocus()
+                return
+            self._start_custom_url(raw, name)
+            return
+
+        # ID path (Ollama name or hf.co reference)
+        if not is_valid_ollama_id(raw) and "/" not in raw:
+            wx.MessageBox(
+                t("models.custom_bad_id_body"),
+                t("models.custom_invalid_title"),
+                wx.OK | wx.ICON_WARNING,
+                self,
+            )
+            self.custom_input.SetFocus()
+            return
+        self._start_custom_id(normalise_ollama_ref(raw))
+
+    def _start_custom_id(self, model_id: str) -> None:
+        self.pull_button.Disable()
+        self.custom_button.Disable()
+        self.progress.SetValue(0)
+        self.progress_label.SetLabel(
+            t("models.pull_starting", model=model_id)
+        )
+        if self._sounds is not None:
+            self._sounds.start_click_metronome()
+        threading.Thread(
+            target=self._run_pull, args=(model_id,), daemon=True
+        ).start()
+
+    def _start_custom_url(self, url: str, name: str) -> None:
+        self.pull_button.Disable()
+        self.custom_button.Disable()
+        self.progress.SetValue(0)
+        self.progress_label.SetLabel(t("models.custom_start", name=name))
+        if self._sounds is not None:
+            self._sounds.start_click_metronome()
+        threading.Thread(
+            target=self._run_custom_url, args=(url, name), daemon=True
+        ).start()
+
+    def _run_custom_url(self, url: str, name: str) -> None:
+        cache_dir = app_data_dir() / "custom_models"
+        dest = cache_dir / f"{name.replace('/', '_').replace(':', '_')}.gguf"
+        try:
+            # Phase 1: download to local disk
+            for p in download_gguf(url, dest):
+                wx.CallAfter(self._on_custom_download_progress, p, name)
+
+            # Phase 2: hand the file to Ollama as a blob
+            def on_blob(phase: str, done: int, total: int) -> None:
+                wx.CallAfter(self._on_custom_blob_progress, phase, done, total, name)
+
+            blob_ref = self._client.upload_blob(dest, progress_cb=on_blob)
+
+            # Phase 3: create the model entry from the blob
+            wx.CallAfter(self._on_custom_create_start, name)
+            for p in self._client.create_from_gguf_blob(name, blob_ref):
+                wx.CallAfter(self._on_custom_create_progress, p, name)
+        except OllamaError as e:
+            wx.CallAfter(self._on_pull_error, e)
+            return
+        wx.CallAfter(self._on_pull_done, name)
+
+    def _on_custom_download_progress(
+        self, p: PullProgress, name: str
+    ) -> None:
+        if p.total:
+            self.progress.SetValue(int(p.fraction * 1000))
+            self.progress_label.SetLabel(
+                t(
+                    "models.custom_downloading",
+                    name=name,
+                    done=_fmt_size(p.completed),
+                    total=_fmt_size(p.total),
+                    pct=f"{p.fraction * 100:.0f}",
+                )
+            )
+        else:
+            self.progress_label.SetLabel(
+                t("models.custom_downloading_indeterminate", name=name)
+            )
+
+    def _on_custom_blob_progress(
+        self, phase: str, done: int, total: int, name: str
+    ) -> None:
+        frac = done / total if total else 0.0
+        self.progress.SetValue(int(frac * 1000))
+        key = (
+            "models.custom_hashing"
+            if phase == "hashing"
+            else "models.custom_uploading"
+        )
+        self.progress_label.SetLabel(
+            t(
+                key,
+                name=name,
+                done=_fmt_size(done),
+                total=_fmt_size(total),
+                pct=f"{frac * 100:.0f}",
+            )
+        )
+
+    def _on_custom_create_start(self, name: str) -> None:
+        self.progress.Pulse()
+        self.progress_label.SetLabel(t("models.custom_creating", name=name))
+
+    def _on_custom_create_progress(self, p: PullProgress, name: str) -> None:
+        # Ollama emits short status strings here ("parsing GGUF",
+        # "writing manifest", etc). Keep them visible for advanced users
+        # but lead with the friendly phrase.
+        status = (p.status or "").strip()
+        if status and status.lower() != "success":
+            self.progress_label.SetLabel(
+                t("models.custom_creating_step", name=name, step=status)
+            )
+
+
+def _fmt_size(num_bytes: int) -> str:
+    """Human-readable size string. Uses MB below 1 GB, GB above."""
+    if num_bytes <= 0:
+        return "0 MB"
+    mb = num_bytes / (1024 ** 2)
+    if mb < 1000:
+        return f"{mb:.0f} MB"
+    gb = num_bytes / (1024 ** 3)
+    return f"{gb:.1f} GB"
 
 
 def _hardware_summary(p: HardwareProfile) -> str:

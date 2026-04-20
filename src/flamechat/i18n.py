@@ -919,6 +919,26 @@ TRANSLATIONS: dict[str, dict[Language, str]] = {
             "Technical details: {err}"
         ),
     },
+    "models.pull_no_selection_title": {
+        "de": "Kein empfohlenes Modell ausgewählt",
+        "en": "No recommended model selected",
+    },
+    "models.pull_no_selection_body": {
+        "de": (
+            "Dieser Knopf lädt ein Modell aus der oberen Liste der "
+            "\u201eEmpfohlenen Modelle\u201c. Markiere dort zuerst eine Zeile.\n\n"
+            "Möchtest du stattdessen eine eigene Kennung (z. B. "
+            "\u201egranite4:3b\u201c) oder eine direkte .gguf-URL verwenden, "
+            "nutze den Bereich \u201eEigenes Modell herunterladen\u201c weiter unten."
+        ),
+        "en": (
+            "This button downloads one of the entries in the "
+            "\u201cRecommended models\u201d list above. Select a row there first.\n\n"
+            "If you instead want to use your own reference (e.g. "
+            "\u201cgranite4:3b\u201d) or a direct .gguf URL, use the \u201cDownload a "
+            "custom model\u201d section below."
+        ),
+    },
     "models.pull_starting": {
         "de": "Starte Download von {model} …",
         "en": "Starting download of {model} …",
@@ -985,6 +1005,142 @@ TRANSLATIONS: dict[str, dict[Language, str]] = {
     "models.installed_row": {
         "de": "{name}  ·  {size:.1f} GB  ·  {params}  ·  {quant}",
         "en": "{name}  ·  {size:.1f} GB  ·  {params}  ·  {quant}",
+    },
+
+    # --- custom model download (ID or direct URL) ---
+    "models.custom_heading": {
+        "de": "Eigenes Modell herunterladen",
+        "en": "Download a custom model",
+    },
+    "models.custom_note": {
+        "de": (
+            "Findest du dein Wunsch-Modell nicht in der Liste? Gib hier entweder "
+            "eine Ollama-Kennung an (z. B. „llama3.1:8b“ oder "
+            "„hf.co/TheBloke/Llama-2-7B-GGUF:Q4_K_M“) oder eine direkte "
+            "Download-Adresse zu einer .gguf-Datei. Bei einer URL lädt "
+            "FlameChat die Datei einmalig direkt vom angegebenen Server "
+            "und übergibt sie dann an dein lokales Ollama."
+        ),
+        "en": (
+            "Can't find the model you want in the list above? Enter either "
+            "an Ollama reference (e.g. “llama3.1:8b” or "
+            "“hf.co/TheBloke/Llama-2-7B-GGUF:Q4_K_M”) or a direct download "
+            "URL to a .gguf file. For a URL, FlameChat downloads the file "
+            "once from the host you specified and hands it to your local "
+            "Ollama."
+        ),
+    },
+    "models.custom_input_label": {
+        "de": "Kennung oder URL:",
+        "en": "Reference or URL:",
+    },
+    "models.custom_input_hint": {
+        "de": "llama3.1:8b  oder  https://.../model.gguf",
+        "en": "llama3.1:8b  or  https://.../model.gguf",
+    },
+    "models.custom_input_name": {
+        "de": "Modellkennung oder Download-URL",
+        "en": "Model reference or download URL",
+    },
+    "models.custom_name_label": {
+        "de": "Name (nur bei URL nötig):",
+        "en": "Name (only needed for URL):",
+    },
+    "models.custom_name_hint": {
+        "de": "z. B. mein-custom-modell — leer lassen für Automatik",
+        "en": "e.g. my-custom-model — leave empty to auto-derive",
+    },
+    "models.custom_name_a11y": {
+        "de": "Lokaler Name für das heruntergeladene Modell",
+        "en": "Local name for the downloaded model",
+    },
+    "models.custom_button": {
+        "de": "Eigenes Modell herunterladen",
+        "en": "Download custom model",
+    },
+    "models.custom_invalid_title": {
+        "de": "Eingabe konnte nicht verarbeitet werden",
+        "en": "Can't process that entry",
+    },
+    "models.custom_empty_body": {
+        "de": (
+            "Bitte gib entweder eine Ollama-Kennung (z. B. „llama3.1:8b“) "
+            "oder eine URL zu einer .gguf-Datei an."
+        ),
+        "en": (
+            "Please enter either an Ollama reference (e.g. “llama3.1:8b”) "
+            "or a URL to a .gguf file."
+        ),
+    },
+    "models.custom_not_gguf_body": {
+        "de": (
+            "FlameChat kann nur .gguf-Modelldateien direkt per URL laden. "
+            "Die angegebene Adresse endet nicht auf .gguf — prüfe, ob du "
+            "den direkten Download-Link kopiert hast (bei Hugging Face "
+            "ist das der „Copy download link“ auf der Datei­seite)."
+        ),
+        "en": (
+            "FlameChat can only download .gguf model files via URL. The "
+            "address you gave doesn't end in .gguf — double-check that "
+            "you copied the direct download link (on Hugging Face that's "
+            "“Copy download link” from the file page)."
+        ),
+    },
+    "models.custom_bad_name_body": {
+        "de": (
+            "Der gewählte Name passt nicht zu dem, was Ollama akzeptiert. "
+            "Erlaubt sind Kleinbuchstaben, Ziffern, Punkt, Unterstrich und "
+            "Bindestrich, optional gefolgt von einem Doppelpunkt und einem "
+            "Tag — z. B. „mein-modell“ oder „mein-modell:q4“."
+        ),
+        "en": (
+            "The name you chose doesn't match what Ollama accepts. Allowed "
+            "characters are lowercase letters, digits, dot, underscore and "
+            "dash, optionally followed by a colon and a tag — e.g. "
+            "“my-model” or “my-model:q4”."
+        ),
+    },
+    "models.custom_bad_id_body": {
+        "de": (
+            "Die Kennung sieht nicht nach einer gültigen Ollama-Referenz "
+            "aus. Beispiele, die funktionieren: „llama3.1:8b“, "
+            "„qwen2.5-coder:7b“, oder eine Hugging-Face-Referenz wie "
+            "„hf.co/TheBloke/Llama-2-7B-GGUF:Q4_K_M“."
+        ),
+        "en": (
+            "That reference doesn't look like a valid Ollama name. "
+            "Examples that work: “llama3.1:8b”, “qwen2.5-coder:7b”, or a "
+            "Hugging Face reference like "
+            "“hf.co/TheBloke/Llama-2-7B-GGUF:Q4_K_M”."
+        ),
+    },
+    "models.custom_start": {
+        "de": "Starte Download von {name} …",
+        "en": "Starting download of {name} …",
+    },
+    "models.custom_downloading": {
+        "de": "Lade {name} herunter: {done} von {total} ({pct} %)",
+        "en": "Downloading {name}: {done} of {total} ({pct} %)",
+    },
+    "models.custom_downloading_indeterminate": {
+        "de": "Lade {name} herunter …",
+        "en": "Downloading {name} …",
+    },
+    "models.custom_hashing": {
+        "de": "Prüfe {name}: {done} von {total} ({pct} %)",
+        "en": "Verifying {name}: {done} of {total} ({pct} %)",
+    },
+    "models.custom_uploading": {
+        "de": "Übergebe {name} an Ollama: {done} von {total} ({pct} %)",
+        "en": "Handing {name} to Ollama: {done} of {total} ({pct} %)",
+    },
+    "models.custom_creating": {
+        "de": "Erstelle Modell {name} in Ollama …",
+        "en": "Creating model {name} in Ollama …",
+    },
+    "models.custom_creating_step": {
+        "de": "Erstelle {name}: {step}",
+        "en": "Creating {name}: {step}",
     },
 }
 

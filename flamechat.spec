@@ -13,24 +13,55 @@
 import sys
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_all, collect_submodules
+
 ROOT = Path(SPECPATH)
 SRC = ROOT / "src"
 
 block_cipher = None
 
 
+# Packages that load submodules / native bits dynamically at runtime.
+# PyInstaller's static scan misses those, so we pull them in wholesale.
+# Symptom of NOT doing this: "Failed to execute script 'flamechat'" the
+# moment one of these packages hits its dynamic import path — most
+# visibly ``accessible_output2.outputs.auto`` on Windows, which probes
+# NVDA/JAWS/SAPI clients by name.
+DYNAMIC_PACKAGES = [
+    "accessible_output2",  # screen-reader backends + controller DLLs
+    "av",                  # PyAV + bundled FFmpeg shared libraries
+    "faster_whisper",      # model-loader shims
+    "ctranslate2",          # whisper backend, native wheels
+    "soundfile",            # libsndfile ships as a dylib / DLL
+    "pyloudnorm",
+]
+
+collected_datas: list = []
+collected_binaries: list = []
+collected_hiddenimports: list = []
+for pkg in DYNAMIC_PACKAGES:
+    try:
+        datas, binaries, hiddenimports = collect_all(pkg)
+    except Exception:
+        # Optional / missing package on a platform → skip, don't hard-fail.
+        continue
+    collected_datas += datas
+    collected_binaries += binaries
+    collected_hiddenimports += hiddenimports
+
+
 a = Analysis(
     [str(SRC / "flamechat" / "__main__.py")],
     pathex=[str(SRC)],
-    binaries=[],
+    binaries=collected_binaries,
     datas=[
         # Bundle the plain WAV assets (send + receive). Typing variants live
         # as obfuscated bytes inside ``ui/_typing_*_data.py`` modules and
         # are picked up via normal Python imports; no data file needed.
         (str(SRC / "flamechat" / "assets" / "send.wav"), "flamechat/assets"),
         (str(SRC / "flamechat" / "assets" / "receive.wav"), "flamechat/assets"),
-    ],
-    hiddenimports=["wx.adv"],
+    ] + collected_datas,
+    hiddenimports=["wx.adv"] + collected_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -38,12 +69,12 @@ a = Analysis(
         # Trim fat: we don't use these wx modules.
         "wx.html2",
         "wx.glcanvas",
-        # No scientific stack, no notebook — PyInstaller pulls them in
-        # for psutil hooks on some systems, but we don't need them.
+        # Science stack we don't actually depend on (we DO use numpy +
+        # scipy; leaving those out of excludes so PyInstaller packages
+        # them properly).
         "IPython",
         "notebook",
         "matplotlib",
-        "numpy",
         "pandas",
     ],
     win_no_prefer_redirects=False,

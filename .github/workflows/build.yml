@@ -1,0 +1,86 @@
+name: Build
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      # A failure on one OS should not cancel the others — we want to
+      # see which platforms are green even while one is broken.
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            name: macos-arm64
+          - os: windows-2022
+            name: windows-x86_64
+          - os: ubuntu-22.04
+            name: linux-x86_64
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Linux system libraries for wxPython
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libglu1-mesa-dev libsdl2-dev libnotify-dev \
+            libpango1.0-dev
+          # wxPython does not publish Linux wheels on PyPI; its own
+          # extras index hosts prebuilt wheels for Ubuntu LTS releases
+          # so we don't have to build wxWidgets from source in CI.
+          python -m pip install --upgrade pip
+          python -m pip install -U \
+            -f https://extras.wxpython.org/wxPython4/extras/linux/gtk3/ubuntu-22.04 \
+            wxPython
+
+      - name: Install Python deps
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install pyinstaller
+
+      - name: Build with PyInstaller
+        run: python -m PyInstaller flamechat.spec --clean --noconfirm
+
+      - name: Package macOS DMG
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p dist/dmg-staging
+          cp -R dist/FlameChat.app dist/dmg-staging/
+          ln -s /Applications dist/dmg-staging/Applications
+          hdiutil create -fs HFS+ -srcfolder dist/dmg-staging \
+            -volname FlameChat -format UDZO \
+            "dist/FlameChat-${{ matrix.name }}.dmg"
+          rm -rf dist/dmg-staging
+
+      - name: Package Windows ZIP
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/FlameChat/* `
+            -DestinationPath "dist/FlameChat-${{ matrix.name }}.zip"
+
+      - name: Package Linux tar.gz
+        if: runner.os == 'Linux'
+        run: |
+          tar -czf "dist/FlameChat-${{ matrix.name }}.tar.gz" -C dist FlameChat
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlameChat-${{ matrix.name }}
+          path: |
+            dist/FlameChat-${{ matrix.name }}.*
+          if-no-files-found: error

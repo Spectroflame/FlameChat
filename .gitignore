@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtualenvs
+.venv/
+.build-venv/
+venv/
+
+# Build output
+build/
+dist/
+*.spec.bak
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Personal / per-machine
+.claude/settings.local.json

@@ -1,0 +1,5 @@
+wxPython>=4.2.1
+psutil>=5.9.0
+httpx>=0.27.0
+zstandard>=0.22.0
+accessible_output2>=0.17

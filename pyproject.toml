@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flamechat"
+version = "0.1.0"
+description = "Accessible, fully local AI chat client (wxPython + Ollama)"
+requires-python = ">=3.10"
+readme = "README.md"
+license = { text = "MIT" }
+dependencies = [
+    "wxPython>=4.2.1",
+    "psutil>=5.9.0",
+    "httpx>=0.27.0",
+    "zstandard>=0.22.0",
+    "accessible_output2>=0.17",
+    # Audio transcription (offline via faster-whisper).
+    "faster-whisper>=1.0.3",
+    # Audio decoding and loudness metrics.
+    "soundfile>=0.12",
+    "scipy>=1.11",
+    "numpy>=1.26",
+    "pyloudnorm>=0.1.1",
+]
+
+[project.scripts]
+flamechat = "flamechat.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+flamechat = ["assets/*.wav"]

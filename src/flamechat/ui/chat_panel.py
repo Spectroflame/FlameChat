@@ -49,6 +49,7 @@ from .intent_dialog import (
     INTENT_TRANSCRIBE_SUMMARY,
 )
 from .sounds import SoundBoard
+from .theme import apply_theme
 
 
 # Upper bound we pass to Ollama via num_predict. Lets us show a real
@@ -299,6 +300,7 @@ class ChatPanel(wx.Panel):
             | None
         ) = None,
         inline_limit: int = 4000,
+        theme: str = "dark",
     ) -> None:
         super().__init__(parent)
         self._sounds = sounds
@@ -310,6 +312,12 @@ class ChatPanel(wx.Panel):
         self._analyse_audio = analyse_audio
         self._transcribe_audio = transcribe_audio
         self._inline_limit = inline_limit
+        # Current theme is tracked here so every message panel we build
+        # from now on gets painted on construction. Message panels are
+        # created dynamically on chat load / send / regenerate, long
+        # after the frame-level apply_theme has finished, so without
+        # this we'd paint the frame dark and then add light children.
+        self._theme = theme
         self._active_chat: Chat | None = None
         self._system_prompt: str | None = None
         self._history: list[Message] = []
@@ -1242,6 +1250,11 @@ class ChatPanel(wx.Panel):
             self,
         )
 
+    def set_theme(self, theme: str) -> None:
+        """Update the stored theme and repaint every existing message."""
+        self._theme = theme
+        apply_theme(self.message_list, theme)
+
     # --- message list helpers ---------------------------------------------
     def _append_message(self, role: str, content: str) -> None:
         if self._empty_label.IsShown():
@@ -1257,6 +1270,10 @@ class ChatPanel(wx.Panel):
             nav_handler=self._handle_nav_key,
             announcer=self._announcer,
         )
+        # Paint the fresh panel before it's added to the sizer so the
+        # first frame the user sees is already dark; otherwise Windows
+        # renders one light frame before the Refresh kicks in.
+        apply_theme(panel, self._theme)
         record.panel = panel
         self._messages.append(record)
         self._list_sizer.Add(panel, 0, wx.EXPAND | wx.ALL, 4)

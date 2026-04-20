@@ -29,6 +29,7 @@ from ..backend.settings import Settings, SettingsStore
 from ..i18n import LANGUAGE_NAMES, Language, t
 from .models_panel import ModelsPanel
 from .sounds import SoundBoard
+from .theme import apply_theme
 
 
 INITIAL_TAB_GENERAL = 0
@@ -49,6 +50,7 @@ class SettingsDialog(wx.Dialog):
         client: OllamaClient,
         profile: HardwareProfile,
         on_models_changed: Callable[[], None],
+        on_theme_changed: Callable[[], None] = lambda: None,
         initial_tab: int = INITIAL_TAB_GENERAL,
     ) -> None:
         super().__init__(
@@ -62,13 +64,17 @@ class SettingsDialog(wx.Dialog):
         self._store = store
         self._sounds = sounds
         self._on_models_changed_ext = on_models_changed
+        self._on_theme_changed_ext = on_theme_changed
 
         outer = wx.BoxSizer(wx.VERTICAL)
         self.notebook = wx.Notebook(self)
         self.notebook.SetName(t("prefs.notebook_name"))
 
         self.general_panel = _GeneralTab(
-            self.notebook, settings=settings, store=store
+            self.notebook,
+            settings=settings,
+            store=store,
+            on_theme_changed=self._handle_theme_changed,
         )
         self.notebook.AddPage(self.general_panel, t("prefs.tab_general"))
 
@@ -104,19 +110,35 @@ class SettingsDialog(wx.Dialog):
 
         close.Bind(wx.EVT_BUTTON, lambda _e: self.EndModal(wx.ID_CLOSE))
 
+        apply_theme(self, settings.theme)
+
     def _handle_models_changed(self) -> None:
         self._on_models_changed_ext()
+
+    def _handle_theme_changed(self) -> None:
+        # Re-paint our own window tree first so the picker's sibling
+        # controls update immediately, then let the main frame reapply
+        # to its own tree.
+        apply_theme(self, self._settings.theme)
+        self._on_theme_changed_ext()
 
 
 class _GeneralTab(wx.Panel):
     WHISPER_SIZES = ("tiny", "base", "small", "medium", "large-v3")
+    THEME_CODES: tuple[str, ...] = ("dark", "light")
 
     def __init__(
-        self, parent: wx.Window, *, settings: Settings, store: SettingsStore
+        self,
+        parent: wx.Window,
+        *,
+        settings: Settings,
+        store: SettingsStore,
+        on_theme_changed: Callable[[], None] = lambda: None,
     ) -> None:
         super().__init__(parent)
         self._settings = settings
         self._store = store
+        self._on_theme_changed = on_theme_changed
 
         sizer = wx.BoxSizer(wx.VERTICAL)
 
@@ -125,6 +147,21 @@ class _GeneralTab(wx.Panel):
         f.SetWeight(wx.FONTWEIGHT_BOLD)
         heading.SetFont(f)
         sizer.Add(heading, 0, wx.ALL, 12)
+
+        # --- theme ---
+        theme_row = wx.BoxSizer(wx.HORIZONTAL)
+        theme_label = wx.StaticText(self, label=t("prefs.general.theme_label"))
+        theme_choices = [t(f"prefs.general.theme_{c}") for c in self.THEME_CODES]
+        self.theme_choice = wx.Choice(self, choices=theme_choices)
+        self.theme_choice.SetName(t("prefs.general.theme_name"))
+        current_theme = (
+            settings.theme if settings.theme in self.THEME_CODES else "dark"
+        )
+        self.theme_choice.SetSelection(self.THEME_CODES.index(current_theme))
+        theme_row.Add(theme_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        theme_row.Add(self.theme_choice, 0, wx.ALIGN_CENTER_VERTICAL)
+        sizer.Add(theme_row, 0, wx.LEFT | wx.RIGHT | wx.TOP, 12)
+        self._add_note(sizer, t("prefs.general.theme_note"))
 
         # --- language ---
         lang_row = wx.BoxSizer(wx.HORIZONTAL)
@@ -183,6 +220,7 @@ class _GeneralTab(wx.Panel):
 
         self.SetSizer(sizer)
 
+        self.theme_choice.Bind(wx.EVT_CHOICE, self._on_theme_selected)
         self.lang_choice.Bind(wx.EVT_CHOICE, self._on_language_changed)
         self.num_predict.Bind(wx.EVT_SPINCTRL, self._on_num_predict_changed)
         self.inline_limit.Bind(wx.EVT_SPINCTRL, self._on_inline_limit_changed)
@@ -192,6 +230,17 @@ class _GeneralTab(wx.Panel):
         note = wx.StaticText(self, label=text)
         note.Wrap(680)
         sizer.Add(note, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
+
+    def _on_theme_selected(self, _event) -> None:
+        idx = self.theme_choice.GetSelection()
+        if idx == wx.NOT_FOUND:
+            return
+        new_theme = self.THEME_CODES[idx]
+        if new_theme == self._settings.theme:
+            return
+        self._settings.theme = new_theme
+        self._store.save(self._settings)
+        self._on_theme_changed()
 
     def _on_language_changed(self, _event) -> None:
         idx = self.lang_choice.GetSelection()

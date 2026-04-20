@@ -635,6 +635,22 @@ TRANSLATIONS: dict[str, dict[Language, str]] = {
     },
 
     "prefs.general.heading": {"de": "Allgemein", "en": "General"},
+    "prefs.general.theme_label": {"de": "Erscheinungsbild:", "en": "Appearance:"},
+    "prefs.general.theme_name": {"de": "Erscheinungsbild", "en": "Appearance"},
+    "prefs.general.theme_dark": {"de": "Dunkel", "en": "Dark"},
+    "prefs.general.theme_light": {"de": "Hell", "en": "Light"},
+    "prefs.general.theme_note": {
+        "de": (
+            "FlameChat startet standardmäßig im dunklen Modus. Die Umschaltung "
+            "greift sofort; einige Nischen-Steuerelemente (etwa die Menüleiste) "
+            "übernehmen die neue Farbe erst beim nächsten Start."
+        ),
+        "en": (
+            "FlameChat starts in dark mode by default. The switch takes "
+            "effect immediately; a few niche controls (the menu bar, for "
+            "instance) only pick up the new colour at the next launch."
+        ),
+    },
     "prefs.general.language_label": {"de": "Sprache:", "en": "Language:"},
     "prefs.general.language_name": {"de": "Sprache", "en": "Language"},
     "prefs.general.language_note": {

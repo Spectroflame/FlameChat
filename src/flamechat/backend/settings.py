@@ -48,6 +48,11 @@ class Settings:
     # large-v3. "small" is a good default — decent accuracy, fast enough
     # on a laptop CPU.
     whisper_model: str = "small"
+    # UI theme: "dark" (default) or "light". Dark is the default on
+    # Windows, macOS and Linux — it matches the modern app baseline and
+    # is the first thing most users expect. Users who prefer the system
+    # light palette can switch in Preferences → General.
+    theme: str = "dark"
     version: int = SETTINGS_VERSION
 
 
@@ -68,6 +73,9 @@ class SettingsStore:
         whisper_model = str(data.get("whisper_model", defaults.whisper_model))
         if whisper_model not in ("tiny", "base", "small", "medium", "large-v3"):
             whisper_model = defaults.whisper_model
+        theme = str(data.get("theme", defaults.theme))
+        if theme not in ("dark", "light"):
+            theme = defaults.theme
         return Settings(
             sounds_enabled=bool(data.get("sounds_enabled", defaults.sounds_enabled)),
             typing_sounds_enabled=bool(
@@ -85,6 +93,7 @@ class SettingsStore:
                 int(data.get("inline_result_char_limit", defaults.inline_result_char_limit)),
             ),
             whisper_model=whisper_model,
+            theme=theme,
             version=int(data.get("version", 1)),
         )
 

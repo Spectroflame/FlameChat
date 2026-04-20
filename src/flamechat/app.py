@@ -46,6 +46,7 @@ from .ui.settings_dialog import (
     SettingsDialog,
 )
 from .ui.sounds import SoundBoard
+from .ui.theme import apply_theme, prime_native_theme
 
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -90,7 +91,23 @@ class MainFrame(wx.Frame):
         self.SetStatusText(t("status.shortcuts"))
         self.Bind(wx.EVT_CLOSE, self._on_close)
 
+        self.apply_theme()
+
         wx.CallAfter(self._initial_boot)
+
+    def apply_theme(self) -> None:
+        """Paint the frame and every descendant per ``settings.theme``.
+
+        Called once after construction and again whenever the user
+        flips the theme picker in Preferences. Dialogs apply their own
+        theme on open, so we only need to cover the main window here.
+        ``chat.set_theme`` also repaints existing message panels, which
+        wouldn't otherwise be reached because they were built after the
+        last apply_theme cycle.
+        """
+        apply_theme(self, self.settings.theme)
+        if hasattr(self, "chat"):
+            self.chat.set_theme(self.settings.theme)
 
     def _build_accelerators(self) -> None:
         """Global keyboard shortcuts for focus management and read-back.
@@ -216,6 +233,7 @@ class MainFrame(wx.Frame):
             analyse_audio=self._analyse_audio,
             transcribe_audio=self._transcribe_audio,
             inline_limit=self.settings.inline_result_char_limit,
+            theme=self.settings.theme,
         )
         self.chat.set_system_prompt(DEFAULT_SYSTEM_PROMPT)
 
@@ -248,6 +266,7 @@ class MainFrame(wx.Frame):
             client=self.client,
             profile=self.profile,
             on_models_changed=self._reload_installed,
+            on_theme_changed=self.apply_theme,
             initial_tab=initial_tab,
         )
         dlg.ShowModal()
@@ -438,6 +457,12 @@ class FlameChatApp(wx.App):
         except Exception:
             pass
 
+        # Opt this process into the Windows dark common-controls theme
+        # BEFORE the first wx.Dialog or wx.Frame is constructed. The
+        # undocumented SetPreferredAppMode call has to run early to take
+        # effect on controls that cache their theme handle at creation.
+        prime_native_theme(settings.theme)
+
         # 0b. Create one SoundBoard up-front and apply persisted sound
         #     preferences. PrepareDialog, ModelsPanel (inside Settings)
         #     and MainFrame all share this instance so audio feedback is
@@ -474,6 +499,7 @@ class FlameChatApp(wx.App):
         manager = OllamaManager()
         atexit.register(manager.stop)
         prepare = PrepareDialog(None, manager=manager, sounds=sounds)
+        apply_theme(prepare, settings.theme)
         result = prepare.ShowModal()
         prepare.Destroy()
         if result != wx.ID_OK:
@@ -489,6 +515,12 @@ class FlameChatApp(wx.App):
             settings=settings,
         )
         frame.Show()
+        # Re-apply after Show: SetBackgroundStyle(BG_STYLE_COLOUR) only
+        # sticks once the widget has a native handle, which on wxMSW
+        # happens during Show. Applying once before and once after
+        # covers both the "constructed but hidden" widgets and the
+        # ones that only finish theming on first paint.
+        frame.apply_theme()
         return True
 
 

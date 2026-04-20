@@ -947,6 +947,35 @@ TRANSLATIONS: dict[str, dict[Language, str]] = {
         "de": "{model} erfolgreich heruntergeladen.",
         "en": "{model} downloaded successfully.",
     },
+    "models.pull_not_found_title": {
+        "de": "Modell-Kennung nicht gefunden",
+        "en": "Model reference not found",
+    },
+    "models.pull_not_found_body": {
+        "de": (
+            "Ollama kennt kein Modell mit dieser Kennung.\n\n"
+            "Meist ist es ein Tippfehler im Namen — z. B. \u201ellama3.1:8b\u201c "
+            "statt \u201elama3.1:8b\u201c oder \u201eqwen2.5-coder:7b\u201c "
+            "statt \u201eqwen:7b\u201c. Prüfe die genaue Schreibweise auf "
+            "https://ollama.com/library.\n\n"
+            "Bei Hugging-Face-Referenzen muss die Form "
+            "\u201ehf.co/<user>/<repo>:<tag>\u201c sein und der Tag (z. B. "
+            "\u201eQ4_K_M\u201c) exakt zu einer bereitgestellten Datei passen.\n\n"
+            "Technische Details: {err}"
+        ),
+        "en": (
+            "Ollama doesn't know a model with that reference.\n\n"
+            "Almost always this is a typo in the name — e.g. "
+            "\u201cllama3.1:8b\u201d instead of \u201clama3.1:8b\u201d, or "
+            "\u201cqwen2.5-coder:7b\u201d instead of \u201cqwen:7b\u201d. "
+            "Double-check the exact spelling at "
+            "https://ollama.com/library.\n\n"
+            "For Hugging Face references the shape must be "
+            "\u201chf.co/<user>/<repo>:<tag>\u201d and the tag (e.g. "
+            "\u201cQ4_K_M\u201d) has to match an uploaded file exactly.\n\n"
+            "Technical details: {err}"
+        ),
+    },
     "models.pull_error_title": {
         "de": "Modell-Download ist fehlgeschlagen",
         "en": "Model download failed",

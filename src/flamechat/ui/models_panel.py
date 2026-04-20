@@ -246,6 +246,21 @@ class ModelsPanel(wx.Panel):
         self.pull_button.Enable()
         self.custom_button.Enable()
         self.progress_label.SetLabel(t("chat.error", err=err))
+        # Typo-in-the-name is by far the most common failure in the
+        # custom-model flow (e.g. "Lama3.1:8b" vs. "llama3.1:8b").
+        # Ollama returns "pull model manifest: file does not exist" in
+        # that case. The generic pull-error dialog talks about network
+        # and disk space, which misleads the user into the wrong fix —
+        # so catch the manifest case and show a targeted dialog instead.
+        msg = str(err).lower()
+        if "manifest" in msg and "exist" in msg:
+            wx.MessageBox(
+                t("models.pull_not_found_body", err=err),
+                t("models.pull_not_found_title"),
+                wx.OK | wx.ICON_WARNING,
+                self,
+            )
+            return
         wx.MessageBox(
             t("models.pull_error_body", err=err),
             t("models.pull_error_title"),

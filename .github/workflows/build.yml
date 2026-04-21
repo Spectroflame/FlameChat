@@ -21,9 +21,9 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -78,7 +78,7 @@ jobs:
           tar -czf "dist/FlameChat-${{ matrix.name }}.tar.gz" -C dist FlameChat
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: FlameChat-${{ matrix.name }}
           path: |

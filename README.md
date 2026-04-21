@@ -25,11 +25,12 @@ on your machine.
 No Python, no terminal, no Ollama install. Grab the build for your OS
 from the Releases page:
 
-- **macOS**: `FlameChat-<version>.dmg` → drag FlameChat to `/Applications`.
-- **Windows**: `FlameChat-<version>-win64.zip` → extract, run
+- **macOS (Apple Silicon)**: `FlameChat-macos-arm64.dmg` → open the
+  disk image and drag FlameChat to `/Applications`.
+- **Windows (x64)**: `FlameChat-windows-x86_64.zip` → extract, run
   `FlameChat.exe`.
-- **Linux**: `FlameChat-<version>-x86_64.AppImage` → `chmod +x` it, then
-  double-click.
+- **Linux (x86_64)**: `FlameChat-linux-x86_64.tar.gz` → `tar -xzf` it,
+  then run `./FlameChat/FlameChat`.
 
 On the very first launch FlameChat downloads Ollama automatically (about
 ~300 MB) into its own app data folder and starts it as a private

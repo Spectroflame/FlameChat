@@ -1006,8 +1006,16 @@ TRANSLATIONS: dict[str, dict[Language, str]] = {
         ),
     },
     "models.pull_progress": {
-        "de": "{status}: {done} / {total} MB ({pct} %)",
-        "en": "{status}: {done} / {total} MB ({pct} %)",
+        "de": "Lade {model} herunter: {done} von {total} ({pct} %)",
+        "en": "Downloading {model}: {done} of {total} ({pct} %)",
+    },
+    "models.pull_phase_preparing": {
+        "de": "Bereite {model} vor …",
+        "en": "Preparing {model} …",
+    },
+    "models.pull_phase_finalizing": {
+        "de": "Schließe {model} ab …",
+        "en": "Finalizing {model} …",
     },
     "models.hw_os": {"de": "Betriebssystem: {os}", "en": "Operating system: {os}"},
     "models.hw_cpu": {

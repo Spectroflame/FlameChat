@@ -48,6 +48,7 @@ class ModelsPanel(wx.Panel):
         self._on_models_changed = on_models_changed
         self._sounds = sounds
         self._installed: list[InstalledModel] = []
+        self._current_pull_name: str = ""
         self._build()
         self.refresh_installed()
 
@@ -188,6 +189,7 @@ class ModelsPanel(wx.Panel):
             )
             return
         suggestion = self._suggestions[idx]
+        self._current_pull_name = suggestion.display_name
         self.pull_button.Disable()
         self.progress.SetValue(0)
         self.progress_label.SetLabel(
@@ -211,21 +213,27 @@ class ModelsPanel(wx.Panel):
         wx.CallAfter(self._on_pull_done, model)
 
     def _on_pull_progress(self, p: PullProgress) -> None:
+        # Ollama's raw status strings include digests like
+        # "pulling ac3d1ba8aa77" that are meaningless to users and very
+        # noisy for screen readers (every digit change is announced).
+        # Replace them with a stable, model-named label and two friendly
+        # phase fallbacks for the short non-byte-carrying transitions
+        # (manifest fetch, verify, cleanup).
+        name = self._current_pull_name or ""
         if p.total:
             self.progress.SetValue(int(p.fraction * 1000))
-            mb_done = p.completed / (1024**2)
-            mb_total = p.total / (1024**2)
             self.progress_label.SetLabel(
                 t(
                     "models.pull_progress",
-                    status=p.status,
-                    done=f"{mb_done:.0f}",
-                    total=f"{mb_total:.0f}",
-                    pct=f"{p.fraction*100:.0f}",
+                    model=name,
+                    done=_fmt_size(p.completed),
+                    total=_fmt_size(p.total),
+                    pct=f"{p.fraction * 100:.0f}",
                 )
             )
         else:
-            self.progress_label.SetLabel(p.status)
+            key = _pull_phase_key(p.status)
+            self.progress_label.SetLabel(t(key, model=name))
 
     def _on_pull_done(self, model: str) -> None:
         if self._sounds is not None:
@@ -318,6 +326,7 @@ class ModelsPanel(wx.Panel):
         self._start_custom_id(normalise_ollama_ref(raw))
 
     def _start_custom_id(self, model_id: str) -> None:
+        self._current_pull_name = model_id
         self.pull_button.Disable()
         self.custom_button.Disable()
         self.progress.SetValue(0)
@@ -427,6 +436,25 @@ def _fmt_size(num_bytes: int) -> str:
         return f"{mb:.0f} MB"
     gb = num_bytes / (1024 ** 3)
     return f"{gb:.1f} GB"
+
+
+_FINALIZING_TOKENS = ("verif", "writing", "removing", "success")
+
+
+def _pull_phase_key(raw_status: str) -> str:
+    """Map Ollama's no-total status strings to a friendly i18n key.
+
+    Ollama emits phases like ``pulling manifest``, ``verifying sha256
+    digest``, ``writing manifest``, ``removing any unused layers`` —
+    and digest-only strings like ``pulling ac3d1ba8aa77`` when it
+    flips to a new layer before bytes start flowing. Anything that
+    looks like a post-download step gets the finalizing label; the
+    rest (manifest, digest handoff) falls back to preparing.
+    """
+    status = (raw_status or "").lower()
+    if any(token in status for token in _FINALIZING_TOKENS):
+        return "models.pull_phase_finalizing"
+    return "models.pull_phase_preparing"
 
 
 def _hardware_summary(p: HardwareProfile) -> str:

@@ -1,10 +1,17 @@
-"""Load and play the send / receive sounds.
+"""Load and play the FlameChat UI sounds.
 
-Uses wx.adv.Sound which is built into wxPython and works on all three
-platforms with bundled WAV files. No extra audio dependency.
+Historically this used ``wx.adv.Sound``, but recent macOS builds
+(wxPython 4.2.x on Apple Silicon) silently refuse to play anything —
+``Play()`` returns False and the user hears nothing. We now decode the
+embedded WAVs to temp files and hand playback to a platform-specific
+:class:`AudioPlayer` (see ``audio_player.py``). That keeps the
+obfuscated-on-disk property (no ``.wav`` files visible inside the app
+bundle) while giving us audio that actually plays.
 
-Sounds can be disabled at runtime (e.g. a user setting in the menu) by
-flipping ``SoundBoard.enabled`` to False.
+Sounds can be disabled at runtime (e.g. via the Settings dialog) by
+flipping ``SoundBoard.enabled`` to False. The typing-loop has its own
+``typing_enabled`` flag so users can silence the long running loop
+without losing the short send / receive cues.
 """
 
 from __future__ import annotations
@@ -19,8 +26,7 @@ import threading
 from importlib.resources import files
 from pathlib import Path
 
-import wx
-import wx.adv
+from .audio_player import AudioPlayer
 
 
 _TYPING_VARIANT_RE = re.compile(r"^_typing_(\d+)_data$")
@@ -39,6 +45,8 @@ class SoundBoard:
         self._click_timer: threading.Timer | None = None
         self._click_lock = threading.Lock()
         self._click_running = False
+        self._player = AudioPlayer()
+        self._typing_player = AudioPlayer()
 
         # Send / receive: single-slot obfuscated WAV, fallback to asset.
         self._send = self._load_obfuscated("send") or self._load_asset("send.wav")
@@ -52,49 +60,45 @@ class SoundBoard:
         # Typing: 0..N obfuscated variants. On each generation we pick one
         # at random and loop it until stop_typing() is called. Old-style
         # single "typing" slot is still accepted as a fallback.
-        self._typing_variants: list[wx.adv.Sound] = self._load_typing_variants()
+        self._typing_variants: list[Path] = self._load_typing_variants()
         if not self._typing_variants:
-            snd = self._load_obfuscated("typing") or self._load_asset("typing.wav")
-            if snd is not None:
-                self._typing_variants = [snd]
+            path = self._load_obfuscated("typing") or self._load_asset("typing.wav")
+            if path is not None:
+                self._typing_variants = [path]
 
     # --- discovery helpers ------------------------------------------------
-    def _load_typing_variants(self) -> list[wx.adv.Sound]:
-        """Find every ``_typing_<N>_data`` module and load its WAV."""
+    def _load_typing_variants(self) -> list[Path]:
+        """Find every ``_typing_<N>_data`` module and extract its WAV."""
         try:
             package = importlib.import_module("flamechat.ui")
         except ImportError:
             return []
-        variants: list[tuple[int, wx.adv.Sound]] = []
+        variants: list[tuple[int, Path]] = []
         for info in pkgutil.iter_modules(package.__path__):
             match = _TYPING_VARIANT_RE.match(info.name)
             if not match:
                 continue
-            snd = self._load_obfuscated(f"typing_{match.group(1)}")
-            if snd is not None:
-                variants.append((int(match.group(1)), snd))
+            path = self._load_obfuscated(f"typing_{match.group(1)}")
+            if path is not None:
+                variants.append((int(match.group(1)), path))
         variants.sort(key=lambda pair: pair[0])
-        return [snd for _, snd in variants]
+        return [p for _, p in variants]
 
     @staticmethod
-    def _load_asset(name: str) -> wx.adv.Sound | None:
+    def _load_asset(name: str) -> Path | None:
         try:
             ref = files("flamechat.assets").joinpath(name)
             path = Path(str(ref))
-            if not path.exists():
-                return None
-            snd = wx.adv.Sound(str(path))
-            return snd if snd.IsOk() else None
+            return path if path.exists() else None
         except (FileNotFoundError, ModuleNotFoundError):
             return None
 
-    def _load_obfuscated(self, slot: str) -> wx.adv.Sound | None:
-        """Load WAV from ``_<slot>_data.WAV_BYTES`` if that module exists.
+    def _load_obfuscated(self, slot: str) -> Path | None:
+        """Decode ``_<slot>_data.WAV_BYTES`` into a temp WAV file.
 
-        Prefers ``wx.adv.Sound.CreateFromData`` (no disk touch at all); if
-        that refuses the bytes — the API is known to be finicky — we drop
-        them to a temp file we clean up on quit. An installed app bundle
-        therefore never has a plain-text .wav on disk.
+        Returns the filesystem path to the decoded WAV, or ``None`` if
+        the data module is missing or can't be written. Temp files are
+        tracked for :meth:`cleanup` so they vanish when the app quits.
         """
         try:
             module = importlib.import_module(f"flamechat.ui._{slot}_data")
@@ -104,23 +108,18 @@ class SoundBoard:
         if not wav_bytes:
             return None
         try:
-            snd = wx.adv.Sound()
-            if snd.CreateFromData(wav_bytes) and snd.IsOk():
-                return snd
-        except Exception:
-            pass
-        try:
             fd, name = tempfile.mkstemp(prefix=f"flamechat-{slot}-", suffix=".wav")
             os.write(fd, wav_bytes)
             os.close(fd)
-            path = Path(name)
-            self._tmp_paths.append(path)
-            snd = wx.adv.Sound(str(path))
-            return snd if snd.IsOk() else None
         except OSError:
             return None
+        path = Path(name)
+        self._tmp_paths.append(path)
+        return path
 
     def cleanup(self) -> None:
+        self._typing_player.stop_loop()
+        self._player.stop_loop()
         for p in self._tmp_paths:
             try:
                 p.unlink()
@@ -130,11 +129,11 @@ class SoundBoard:
 
     def play_send(self) -> None:
         if self.enabled and self._send is not None:
-            self._send.Play(wx.adv.SOUND_ASYNC)
+            self._player.play_oneshot(self._send)
 
     def play_receive(self) -> None:
         if self.enabled and self._receive is not None:
-            self._receive.Play(wx.adv.SOUND_ASYNC)
+            self._player.play_oneshot(self._receive)
 
     def play_typing_loop(self) -> None:
         """Pick a random typing variant and loop it until ``stop_typing``.
@@ -147,27 +146,26 @@ class SoundBoard:
             return
         if not self._typing_variants:
             return
-        wx.adv.Sound.Stop()
         variant = random.choice(self._typing_variants)
-        variant.Play(wx.adv.SOUND_ASYNC | wx.adv.SOUND_LOOP)
+        self._typing_player.start_loop(variant)
 
     def stop_typing(self) -> None:
         """Stop any looping typing sound. Safe to call when nothing is playing."""
-        wx.adv.Sound.Stop()
+        self._typing_player.stop_loop()
 
     def play_typing_sample(self) -> None:
         """Play one random typing variant once (no loop). Used by test buttons."""
         if not self._typing_variants:
             return
-        wx.adv.Sound.Stop()
-        random.choice(self._typing_variants).Play(wx.adv.SOUND_ASYNC)
+        self._typing_player.stop_loop()
+        self._player.play_oneshot(random.choice(self._typing_variants))
 
     # --- click / byte-bloop + metronome ----------------------------------
     def play_click(self) -> None:
         """Play one byte-bloop click. Used as a progress tick sound."""
         if not self.enabled or self._click is None:
             return
-        self._click.Play(wx.adv.SOUND_ASYNC)
+        self._player.play_oneshot(self._click)
 
     def start_click_metronome(self, interval_s: float = CLICK_INTERVAL_S) -> None:
         """Play a click tick every ``interval_s`` until :meth:`stop_click_metronome`.

@@ -12,8 +12,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # macos-14 (Sonoma) is the baseline DMG — broadest compatibility
+          # across the installed Mac fleet. macos-26 (Tahoe) is a second
+          # build so we can verify FlameChat still compiles, installs its
+          # wheels and runs PyInstaller on the current macOS, and so a
+          # user with a Tahoe machine can download that DMG and smoke-
+          # test the real artifact (wxPython + appscript + afplay) there.
           - os: macos-14
             name: macos-arm64
+          - os: macos-26
+            name: macos-arm64-tahoe
           - os: windows-2022
             name: windows-x86_64
           - os: ubuntu-22.04

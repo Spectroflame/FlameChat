@@ -147,10 +147,14 @@ class ChatListPanel(wx.Panel):
         chat = self.selected_chat()
         if chat is None:
             return
+        # "Yes" is the default so a plain Enter after opening the
+        # confirm dialog completes the delete — the user asked for
+        # this because the keyboard flow (Delete → Enter) is what
+        # they actually use.
         confirm = wx.MessageBox(
             t("list.confirm_delete_body", title=chat.title),
             t("list.confirm_delete_title"),
-            wx.YES_NO | wx.ICON_WARNING | wx.NO_DEFAULT,
+            wx.YES_NO | wx.ICON_WARNING,
             self,
         )
         if confirm != wx.YES:

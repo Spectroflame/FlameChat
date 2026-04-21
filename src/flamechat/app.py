@@ -17,6 +17,7 @@ enforcement.
 from __future__ import annotations
 
 import atexit
+import sys
 
 import wx
 
@@ -123,16 +124,35 @@ class MainFrame(wx.Frame):
         ``Alt/Option + 1..0 + -`` speak the last 11 messages through the
         screen reader. ``Alt+1`` reads the most recent message, ``Alt+2``
         the one before it, and so on; ``Alt+-`` (the key right of 0, i.e.
-        ß on German layouts) reads the 11th-most-recent.
+        ß on German layouts) reads the 11th-most-recent. Pressing the
+        same shortcut twice in quick succession copies that message to
+        the clipboard instead of re-reading it.
         """
         self._focus_list_id = wx.NewIdRef().GetId()
         self._focus_input_id = wx.NewIdRef().GetId()
         self._focus_model_id = wx.NewIdRef().GetId()
+        self._status_announce_id = wx.NewIdRef().GetId()
+
+        # On macOS, wx.ACCEL_CTRL maps to Cmd — that's the right thing
+        # for "Ctrl+1 / Ctrl+2 / Ctrl+3" because Cmd+N is the Mac
+        # idiom for app-level shortcuts. The Status shortcut, though,
+        # is specifically asked to be the *physical* Ctrl key (same
+        # chord on every OS), which means wx.ACCEL_RAW_CTRL on Mac
+        # and plain wx.ACCEL_CTRL on Windows / Linux (where raw and
+        # logical Ctrl are the same key anyway).
+        physical_ctrl = (
+            wx.ACCEL_RAW_CTRL if sys.platform == "darwin" else wx.ACCEL_CTRL
+        )
 
         entries: list[tuple[int, int, int]] = [
             (wx.ACCEL_CTRL, ord("1"), self._focus_list_id),
             (wx.ACCEL_CTRL, ord("2"), self._focus_input_id),
             (wx.ACCEL_CTRL, ord("3"), self._focus_model_id),
+            # Ctrl+Shift+S speaks a whole-app status summary — during
+            # generation it's "phase + percent", idle it's "chat state
+            # + model + RAM". Gives users a single question-and-answer
+            # shortcut they can fire whenever they want to orient.
+            (physical_ctrl | wx.ACCEL_SHIFT, ord("S"), self._status_announce_id),
         ]
 
         # Alt/Option + digit/minus: announce last 11 messages. Keys in
@@ -147,7 +167,7 @@ class MainFrame(wx.Frame):
             entries.append((wx.ACCEL_ALT, key, new_id))
             self.Bind(
                 wx.EVT_MENU,
-                lambda _e, off=offset_from_end: self.chat.announce_recent_message(off),
+                lambda _e, off=offset_from_end: self.chat.activate_recent_message(off),
                 id=new_id,
             )
 
@@ -161,6 +181,9 @@ class MainFrame(wx.Frame):
         )
         self.Bind(
             wx.EVT_MENU, lambda _e: self._focus_model_choice(), id=self._focus_model_id
+        )
+        self.Bind(
+            wx.EVT_MENU, lambda _e: self.chat.announce_status(), id=self._status_announce_id
         )
 
         # App-wide Tab routing that bridges the toolbar into the natural
@@ -434,9 +457,7 @@ class MainFrame(wx.Frame):
         """Reset the right pane when there are no chats and auto-create is off."""
         self.chat._clear_ui()  # noqa: SLF001
         self.chat._active_chat = None  # noqa: SLF001
-        self.chat._set_status(  # noqa: SLF001
-            "Keine Chats — lege links einen neuen Chat an, um zu beginnen."
-        )
+        self.chat._set_status(t("app.empty_state_no_chats"))  # noqa: SLF001
 
     def _reload_installed(self) -> None:
         try:
@@ -456,7 +477,7 @@ class MainFrame(wx.Frame):
     # --- backend glue ------------------------------------------------------
     def _stream_chat(self, messages, model, cancel_event):
         if not model:
-            raise OllamaNotRunning("Kein Modell ausgewählt.")
+            raise OllamaNotRunning(t("ollama.no_model_selected"))
         # Cap generation length so the progress percentage has a meaningful
         # ceiling. The model may still stop earlier with done:true.
         yield from self.client.chat_stream(
@@ -483,22 +504,22 @@ class MainFrame(wx.Frame):
 
     def _analyse_audio(self, attachment: Attachment, cancel_event, on_progress) -> str:
         """Run the technical audio analysis only. No transcription."""
-        on_progress("Analysing audio …", -1.0)
+        on_progress(t("audio.status.analysing"), -1.0)
         return audio_analysis.analyze(attachment.stored_path).as_text()
 
     def _transcribe_audio(
         self, attachment: Attachment, cancel_event, on_progress, summarise: bool
     ) -> tuple[str, str]:
         """Transcribe and (optionally) summarise. Returns (transcript, summary)."""
-        on_progress("Preparing transcription model …", -1.0)
+        on_progress(t("audio.status.prep_transcription"), -1.0)
         try:
             transcription.ensure_model(self.settings.whisper_model, on_progress)
         except Exception as e:  # noqa: BLE001
-            return f"[Transcription model preparation failed: {e}]", ""
+            return t("audio.error.prep_failed", err=e), ""
         if cancel_event.is_set():
             return "", ""
 
-        on_progress("Transcribing …", 0.0)
+        on_progress(t("audio.status.transcribing"), 0.0)
         try:
             transcript = transcription.transcribe(
                 attachment.stored_path,
@@ -507,7 +528,7 @@ class MainFrame(wx.Frame):
                 cancel_event=cancel_event,
             )
         except Exception as e:  # noqa: BLE001
-            return f"[Transcription failed: {e}]", ""
+            return t("audio.error.transcribe_failed", err=e), ""
 
         transcript_text = transcript.plain_text
         if not summarise or cancel_event.is_set() or not transcript_text:
@@ -518,18 +539,23 @@ class MainFrame(wx.Frame):
             # No chat model loaded — skip summary, return transcript only.
             return transcript_text, ""
 
-        on_progress("Summarising transcript …", -1.0)
+        on_progress(t("audio.status.summarising"), -1.0)
         try:
+            # The summarisation prompt is fed to the model, not the user,
+            # so we pass the resolved active language (not "auto") so the
+            # prompt line "Reply in <language>" stays meaningful.
+            from .i18n import current_language
+
             summary_text = summarization.summarize(
                 self.client,
                 model=model,
                 text=transcript_text,
-                language=("German" if self.settings.language == "de" else "English"),
+                language=("German" if current_language() == "de" else "English"),
                 cancel_event=cancel_event,
                 on_progress=on_progress,
             )
         except Exception as e:  # noqa: BLE001
-            summary_text = f"[Summary failed: {e}]"
+            summary_text = t("audio.error.summary_failed", err=e)
         return transcript_text, summary_text
 
     def _on_close(self, event) -> None:
@@ -575,16 +601,8 @@ class FlameChatApp(wx.App):
             OllamaClient().close()
         except NonLocalHostError as e:
             wx.MessageBox(
-                (
-                    "FlameChat wurde mit einer nicht-lokalen Ollama-Adresse "
-                    "gestartet und verbindet sich aus Sicherheitsgründen nur "
-                    "mit deinem eigenen Rechner (127.0.0.1).\n\n"
-                    f"Fehler: {e}\n\n"
-                    "Zum Beheben: lösche die Umgebungsvariable OLLAMA_HOST oder "
-                    "setze sie auf http://127.0.0.1:11434 und starte FlameChat "
-                    "erneut."
-                ),
-                "Ollama-Adresse nicht lokal",
+                t("app.non_local_host.body", err=e),
+                t("app.non_local_host.title"),
                 wx.OK | wx.ICON_ERROR,
             )
             return False

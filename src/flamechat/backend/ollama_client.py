@@ -26,6 +26,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from ..i18n import t
+
 
 DEFAULT_HOST = "http://127.0.0.1:11434"
 CONNECT_TIMEOUT = 3.0
@@ -57,37 +59,19 @@ def validate_loopback(raw: str) -> str:
         raw = "http://" + raw  # Ollama's own convention: bare "127.0.0.1:11434"
     parsed = urlparse(raw)
     if parsed.scheme == "https":
-        raise NonLocalHostError(
-            "Die Umgebungsvariable OLLAMA_HOST benutzt das https-Schema. "
-            "Für die Verbindung zu einem lokalen Ollama auf deinem "
-            "eigenen Rechner ist TLS weder nötig noch von Ollama "
-            "standardmäßig unterstützt.\n\n"
-            "So behebst du das: setze OLLAMA_HOST auf "
-            "http://127.0.0.1:11434 oder entferne die Variable ganz."
-        )
+        raise NonLocalHostError(t("ollama.loopback.https"))
     if parsed.scheme != "http":
         raise NonLocalHostError(
-            f"Die Umgebungsvariable OLLAMA_HOST benutzt ein unbekanntes "
-            f"Schema ({parsed.scheme!r}). FlameChat akzeptiert nur http "
-            "auf einer Loopback-Adresse.\n\n"
-            "So behebst du das: setze OLLAMA_HOST auf "
-            "http://127.0.0.1:11434 oder entferne die Variable ganz."
+            t("ollama.loopback.unknown_scheme", scheme=parsed.scheme)
         )
     host = parsed.hostname
     if not host:
-        raise NonLocalHostError(
-            "OLLAMA_HOST enthält keinen gültigen Hostnamen. Erwartet wird "
-            "eine Adresse wie http://127.0.0.1:11434. Entferne die Variable "
-            "oder setze sie auf genau diesen Wert."
-        )
+        raise NonLocalHostError(t("ollama.loopback.no_host"))
     try:
         infos = socket.getaddrinfo(host, parsed.port or 11434)
     except socket.gaierror as e:
         raise NonLocalHostError(
-            f"Der Hostname „{host}“ in OLLAMA_HOST konnte nicht aufgelöst "
-            f"werden ({e}).\n\n"
-            "So behebst du das: setze OLLAMA_HOST auf http://127.0.0.1:11434 "
-            "oder entferne die Variable."
+            t("ollama.loopback.resolve_failed", host=host, err=e)
         ) from e
     for info in infos:
         ip_str = info[4][0]
@@ -97,12 +81,7 @@ def validate_loopback(raw: str) -> str:
             continue
         if not ip.is_loopback:
             raise NonLocalHostError(
-                f"OLLAMA_HOST verweist auf „{host}“, was zu {ip} aufgelöst "
-                "wird. Das ist kein lokaler Rechner, sondern ein externer.\n\n"
-                "FlameChat verbindet sich aus Datenschutz­gründen nur mit "
-                "deinem eigenen Rechner (127.0.0.1 oder ::1). "
-                "So behebst du das: setze OLLAMA_HOST auf "
-                "http://127.0.0.1:11434 oder entferne die Variable ganz."
+                t("ollama.loopback.not_loopback", host=host, ip=ip)
             )
     port = parsed.port or 11434
     # IPv6 literals must be wrapped in brackets in a URL authority.
@@ -122,6 +101,14 @@ class InstalledModel:
     family: str        # e.g. "qwen2", "llama"
     parameter_size: str  # e.g. "3B"
     quantization: str  # e.g. "Q4_K_M"
+
+
+@dataclass(frozen=True)
+class LoadedModel:
+    """A model currently resident in Ollama's RAM/VRAM (``/api/ps``)."""
+    name: str
+    size_bytes: int       # total resident size (RAM + VRAM)
+    size_vram_bytes: int  # how much of it sits in GPU memory
 
 
 @dataclass(frozen=True)
@@ -280,15 +267,7 @@ class OllamaClient:
         try:
             r = self._client.get("/api/tags")
         except httpx.HTTPError as e:
-            raise OllamaNotRunning(
-                "FlameChat konnte Ollama nicht erreichen.\n\n"
-                "Wahrscheinlich läuft der Ollama-Dienst gerade nicht. "
-                "So bekommst du ihn wieder an:\n"
-                " • Beende FlameChat und starte es neu — beim Start wird "
-                "Ollama automatisch wieder hochgefahren.\n"
-                " • Oder öffne Ollama.app aus dem Programme-Ordner von Hand.\n"
-                f"Technische Details: {e}"
-            ) from e
+            raise OllamaNotRunning(t("ollama.unreachable", err=e)) from e
         r.raise_for_status()
         out: list[InstalledModel] = []
         for m in r.json().get("models", []):
@@ -300,6 +279,31 @@ class OllamaClient:
                     family=details.get("family", ""),
                     parameter_size=details.get("parameter_size", ""),
                     quantization=details.get("quantization_level", ""),
+                )
+            )
+        return out
+
+    def list_loaded(self) -> list[LoadedModel]:
+        """Return which models are currently resident in Ollama's memory.
+
+        Uses ``/api/ps`` — the same endpoint ``ollama ps`` on the
+        command line queries. Empty list means nothing is loaded yet
+        (fresh Ollama process, or the idle unload timer fired).
+        Failures collapse to an empty list: the caller wants a memory
+        readout, not a reason to surface an error dialog.
+        """
+        try:
+            r = self._client.get("/api/ps", timeout=CONNECT_TIMEOUT)
+            r.raise_for_status()
+        except httpx.HTTPError:
+            return []
+        out: list[LoadedModel] = []
+        for m in r.json().get("models", []):
+            out.append(
+                LoadedModel(
+                    name=m.get("name", ""),
+                    size_bytes=int(m.get("size", 0)),
+                    size_vram_bytes=int(m.get("size_vram", 0)),
                 )
             )
         return out
@@ -351,7 +355,7 @@ class OllamaClient:
         with path.open("rb") as f:
             while True:
                 if cancel_event is not None and cancel_event.is_set():
-                    raise OllamaError("Vorgang vom Nutzer abgebrochen.")
+                    raise OllamaError(t("ollama.cancelled_by_user"))
                 chunk = f.read(1 << 20)
                 if not chunk:
                     break
@@ -373,7 +377,7 @@ class OllamaClient:
             with path.open("rb") as f:
                 while True:
                     if cancel_event is not None and cancel_event.is_set():
-                        raise OllamaError("Vorgang vom Nutzer abgebrochen.")
+                        raise OllamaError(t("ollama.cancelled_by_user"))
                     chunk = f.read(1 << 20)
                     if not chunk:
                         break
@@ -456,11 +460,4 @@ class OllamaClient:
                     if payload.get("done"):
                         break
         except httpx.ConnectError as e:
-            raise OllamaNotRunning(
-                "Die Verbindung zu Ollama ist unterbrochen.\n\n"
-                "Mögliche Ursache: Ollama wurde zwischenzeitlich beendet "
-                "(z. B. durch Schlaf­modus oder manuelles Schließen aus "
-                "dem Menüleisten-Symbol).\n\n"
-                "So geht's wieder: beende FlameChat und starte es neu — "
-                "dabei wird Ollama automatisch hochgefahren."
-            ) from e
+            raise OllamaNotRunning(t("ollama.connection_lost")) from e

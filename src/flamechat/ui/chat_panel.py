@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import sys
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, Iterator
@@ -56,6 +57,13 @@ from .theme import apply_theme
 # percentage during generation: "current_tokens / MAX_PREDICT". If the
 # model stops earlier with `done:true` we snap to 100%.
 MAX_PREDICT_TOKENS = 2048
+
+# Seconds between two Alt+N presses that still count as a "double tap".
+# 500 ms matches the OS-level double-click default on macOS, Windows
+# and most Linux desktops — long enough to re-press deliberately, short
+# enough not to conflate with a re-read after the screen reader has
+# finished speaking.
+DOUBLE_TAP_WINDOW_S = 0.5
 
 
 Message = dict[str, str]  # {"role": "user"|"assistant"|"system", "content": "..."}
@@ -327,6 +335,16 @@ class ChatPanel(wx.Panel):
         # Files the user has attached but not yet sent. Images and text
         # stage here; audio intents run immediately and bypass this.
         self._staged: list[Attachment] = []
+        # Alt+N multi-tap tracking: the same shortcut, pressed
+        # repeatedly inside DOUBLE_TAP_WINDOW, cycles through actions
+        # on the same message — 1st tap speaks it, 2nd copies it, 3rd
+        # speaks its size details (chars + rough token estimate).
+        self._last_recent_offset: int | None = None
+        self._last_recent_time: float = 0.0
+        self._last_recent_count: int = 0
+        # Running token count for the in-flight generation; drives the
+        # Ctrl+Shift+S announcement during the "writing" phase.
+        self._token_count: int = 0
         self._build()
 
     def _build(self) -> None:
@@ -413,6 +431,12 @@ class ChatPanel(wx.Panel):
         self.abort_button.Bind(wx.EVT_BUTTON, lambda _e: self._request_cancel())
         self.attach_button.Bind(wx.EVT_BUTTON, lambda _e: self._on_attach())
         self.input.Bind(wx.EVT_KEY_DOWN, self._on_input_key)
+        # Keep the send button in sync with "there's something to send":
+        # empty input and no staged attachments → disabled, so screen
+        # reader users get a clear "dimmed" cue and accidental clicks
+        # just do nothing.
+        self.input.Bind(wx.EVT_TEXT, lambda _e: self._refresh_send_button())
+        self._refresh_send_button()
 
         self.input.SetFocus()
 
@@ -437,6 +461,39 @@ class ChatPanel(wx.Panel):
 
     def active_chat(self) -> Chat | None:
         return self._active_chat
+
+    def activate_recent_message(self, offset_from_end: int) -> None:
+        """Handle Alt+N: cycle speak → copy → details on rapid re-taps.
+
+        The Alt+1..0/ß shortcuts address the last 11 messages. A
+        single press speaks the message. Pressing the *same* shortcut
+        again inside :data:`DOUBLE_TAP_WINDOW_S` copies it to the
+        clipboard. A third press in the same window announces size
+        details (character count + rough token estimate) — the
+        "advanced" information we stopped surfacing in the status
+        bar. Any press on a different slot, or a press after the
+        window expires, resets the cycle.
+        """
+        now = time.monotonic()
+        in_window = (
+            self._last_recent_offset == offset_from_end
+            and (now - self._last_recent_time) <= DOUBLE_TAP_WINDOW_S
+        )
+        next_count = self._last_recent_count + 1 if in_window else 1
+        self._last_recent_offset = offset_from_end
+        self._last_recent_time = now
+        self._last_recent_count = next_count
+
+        if next_count == 1:
+            self.announce_recent_message(offset_from_end)
+        elif next_count == 2:
+            self._copy_recent_message(offset_from_end)
+        else:
+            # Third (or later) press: announce details. Keep the
+            # counter pinned so a very fast fourth press doesn't
+            # wrap back to "speak" — the user's intent is clearly
+            # "drill into this message", not "start over".
+            self._announce_message_details(offset_from_end)
 
     def announce_recent_message(self, offset_from_end: int) -> None:
         """Speak the message at ``offset_from_end`` via the screen reader.
@@ -465,6 +522,113 @@ class ChatPanel(wx.Panel):
         self._announcer.announce(
             f"{role_text}: {rec.content}", interrupt=True
         )
+
+    def _copy_recent_message(self, offset_from_end: int) -> None:
+        """Second Alt+N tap: copy the targeted message's body to clipboard."""
+        total = len(self._messages)
+        idx = total - offset_from_end
+        if idx < 0 or idx >= total:
+            if self._announcer is not None:
+                self._announcer.announce(
+                    t("say.only_n_messages", count=total), interrupt=True
+                )
+            return
+        content = self._messages[idx].content
+        if wx.TheClipboard.Open():
+            wx.TheClipboard.SetData(wx.TextDataObject(content))
+            wx.TheClipboard.Close()
+        if self._announcer is not None:
+            self._announcer.announce(t("say.copied"), interrupt=True)
+
+    def _announce_message_details(self, offset_from_end: int) -> None:
+        """Third Alt+N tap: speak size details for the targeted message.
+
+        Token count is estimated at 4 characters per token — the
+        rough heuristic for Latin-script text. It isn't the exact
+        number Ollama would bill for, but it's in the right
+        ballpark and saves us from shipping a real tokenizer just
+        to answer "is this a big message?".
+        """
+        total = len(self._messages)
+        idx = total - offset_from_end
+        if idx < 0 or idx >= total or self._announcer is None:
+            return
+        rec = self._messages[idx]
+        chars = len(rec.content)
+        tokens = max(1, chars // 4)
+        self._announcer.announce(
+            t(
+                "msg.details",
+                role=_role_label(rec.role),
+                i=idx + 1,
+                n=total,
+                chars=chars,
+                tokens=tokens,
+            ),
+            interrupt=True,
+        )
+
+    def announce_status(self) -> None:
+        """Ctrl+Shift+S — speak what FlameChat is doing right now.
+
+        Busy (generation in flight): phase + percentage, so users who
+        stepped away know roughly how long is left without having to
+        watch the progress bar. Otherwise: chat state, picked model,
+        and the resident memory Ollama is using for it — the three
+        bits of context that matter when deciding whether to send
+        another message or switch to a smaller model.
+        """
+        if self._announcer is None:
+            return
+        if self._busy:
+            pct = int((self.progress.GetValue() / 1000) * 100)
+            if self._token_count == 0:
+                self._announcer.announce(t("status.busy_thinking"), interrupt=True)
+            else:
+                self._announcer.announce(
+                    t("status.busy_writing", pct=pct), interrupt=True
+                )
+            return
+
+        # Idle — build the message out of chat state + model + RAM.
+        if self._active_chat is None:
+            self._announcer.announce(t("status.no_chat_open"), interrupt=True)
+            return
+        n = len(self._messages)
+        model = self._get_active_model()
+        model_clause = (
+            t("status.model_clause", model=model) if model else t("status.no_model")
+        )
+        ram_clause = self._describe_active_model_ram(model)
+        key = "status.idle_empty" if n == 0 else "status.idle_messages"
+        self._announcer.announce(
+            t(key, n=n, model_clause=model_clause, ram_clause=ram_clause),
+            interrupt=True,
+        )
+
+    def _describe_active_model_ram(self, model: str | None) -> str:
+        """Ask Ollama how much memory the active model is holding.
+
+        Returns a translated "X.Y GB" clause when the model is
+        currently loaded, a "not loaded yet" note when Ollama has it
+        on disk but not in memory, or an empty string when we can't
+        reach Ollama / no model is picked (the broader status line
+        is already covering those cases).
+        """
+        if not model:
+            return ""
+        try:
+            frame = self.GetTopLevelParent()
+            client = getattr(frame, "client", None)
+            if client is None:
+                return ""
+            loaded = client.list_loaded()
+        except Exception:
+            return ""
+        for lm in loaded:
+            if lm.name == model:
+                return t("status.ram_clause", gb=lm.size_bytes / (1024 ** 3))
+        return t("status.ram_unknown")
 
     def set_system_prompt(self, prompt: str | None) -> None:
         """System prompt is app-global; stored outside the persisted chat."""
@@ -527,7 +691,9 @@ class ChatPanel(wx.Panel):
             self._active_chat.messages = self._active_chat.messages[:prompt_idx]
             self._on_changed(self._active_chat)
 
-        # Re-send by the usual path.
+        # Re-send by the usual path. ``_submit`` no longer chimes on
+        # its own, so do it here to match the Enter-press behaviour.
+        self._sounds.play_send()
         self._submit(prompt_text)
 
     # --- event handlers ----------------------------------------------------
@@ -767,8 +933,12 @@ class ChatPanel(wx.Panel):
                 if cancel_event.is_set():
                     break
                 progress_hook(
-                    f"{attachment.original_name} "
-                    f"({i}/{len(attachments)}) — analysiere …",
+                    t(
+                        "audio.status.analysing_item",
+                        name=attachment.original_name,
+                        i=i,
+                        n=len(attachments),
+                    ),
                     -1.0,
                 )
                 report = self._analyse_audio(
@@ -822,8 +992,12 @@ class ChatPanel(wx.Panel):
                 if cancel_event.is_set():
                     break
                 progress_hook(
-                    f"{attachment.original_name} "
-                    f"({i}/{len(attachments)}) — transkribiere …",
+                    t(
+                        "audio.status.transcribing_item",
+                        name=attachment.original_name,
+                        i=i,
+                        n=len(attachments),
+                    ),
                     -1.0,
                 )
                 transcript, summary = self._transcribe_audio(
@@ -862,11 +1036,20 @@ class ChatPanel(wx.Panel):
                         attachment, transcript, what_key="chat.what_transcript"
                     )
                     if saved is not None:
-                        file_block.append(f"[{what_transcript}: {saved}]")
+                        file_block.append(
+                            t(
+                                "audio.transcript.saved",
+                                what=what_transcript,
+                                path=saved,
+                            )
+                        )
                     else:
                         file_block.append(
-                            f"[{what_transcript}: {len(transcript)} Zeichen, "
-                            "nicht gespeichert]"
+                            t(
+                                "audio.transcript.not_saved",
+                                what=what_transcript,
+                                chars=len(transcript),
+                            )
                         )
             blocks.append("\n\n".join(file_block))
         combined = "\n\n".join(blocks).strip()
@@ -909,6 +1092,10 @@ class ChatPanel(wx.Panel):
 
     def _refresh_staging_ui(self) -> None:
         """Rebuild the chip row so it matches ``self._staged`` exactly."""
+        # Staging state feeds into the send button's enabled state —
+        # an attached file counts as "something to send" even with an
+        # empty text input.
+        self._refresh_send_button()
         # Remove every child except the leading label.
         for child in list(self._staging_sizer.GetChildren()):
             win = child.GetWindow()
@@ -974,9 +1161,12 @@ class ChatPanel(wx.Panel):
         self._append_assistant_result(inline_text or t("chat.empty_answer"))
         self._sounds.play_receive()
         self._set_status(t("chat.received"))
+        # No SetFocus here for the same reason as _on_generation_done:
+        # moving focus fires a VoiceOver focus cue that would cut off
+        # whatever we announce next, and the user either is still in
+        # the input anyway or has intentionally navigated elsewhere.
         if self._announcer is not None:
             self._announcer.announce(t("say.msg_received"))
-        self.input.SetFocus()
 
     # --- helpers used by attachments -------------------------------------
     def _append_user_note(self, text: str) -> None:
@@ -1044,10 +1234,22 @@ class ChatPanel(wx.Panel):
         if not typed and not self._staged:
             self._set_status(t("chat.empty_submit"))
             return
+        # Play the send chime *before* clearing the input, rendering a
+        # new message widget and persisting the chat. Those steps can
+        # take 50–150 ms on slower machines, and users expect instant
+        # auditory feedback on Enter / Send click — moving the sound
+        # to the top makes the app feel responsive.
+        self._sounds.play_send()
         self.input.SetValue("")
         staged = list(self._staged)
         self._clear_staging()
         self._submit(typed, staged=staged)
+
+    def _refresh_send_button(self) -> None:
+        """Enable send iff there is content to send (text or attachments)."""
+        has_text = bool(self.input.GetValue().strip())
+        has_staged = bool(self._staged)
+        self.send_button.Enable(has_text or has_staged)
 
     def _submit(
         self,
@@ -1131,10 +1333,14 @@ class ChatPanel(wx.Panel):
                 for img in images
             ]
 
-        self._sounds.play_send()
+        # The send chime is fired by the caller (``_on_send`` /
+        # ``regenerate_from``) right after the user's action — that
+        # way the "ding" plays while this method spends time rendering
+        # the message widget and persisting the chat to disk.
         self._cancel_event = threading.Event()
+        self._token_count = 0  # reset — fresh turn, no chunks yet
         self._set_busy(True)
-        self._set_status(t("chat.thinking", model=model))
+        self._set_status(t("chat.thinking"))
         self.progress.SetValue(0)
         if self._announcer is not None:
             self._announcer.announce(t("say.msg_sent"))
@@ -1188,16 +1394,14 @@ class ChatPanel(wx.Panel):
     def _on_generation_chunk(self, token_count: int) -> None:
         """Called on the UI thread for each streamed chunk."""
         # Approximate percentage: chunks ≈ tokens, capped at MAX_PREDICT.
+        # We deliberately stopped surfacing the raw token count in the
+        # status bar — most users can't act on "430 tokens of 2048",
+        # it was just noise. Power users who want the raw number can
+        # still get it via Ctrl+Shift+S or the Alt+N triple-tap.
         pct = min(1.0, token_count / MAX_PREDICT_TOKENS)
         self.progress.SetValue(int(pct * 1000))
-        self._set_status(
-            t(
-                "chat.writing",
-                tokens=token_count,
-                pct=int(pct * 100),
-                max=MAX_PREDICT_TOKENS,
-            )
-        )
+        self._token_count = token_count
+        self._set_status(t("chat.writing", pct=int(pct * 100)))
 
     def _request_cancel(self) -> None:
         if self._cancel_event is not None and not self._cancel_event.is_set():
@@ -1225,16 +1429,25 @@ class ChatPanel(wx.Panel):
         self._set_busy(False)
         self._cancel_event = None
         self._set_status(t("chat.aborted") if aborted else t("chat.received"))
+        # Deliberately no ``self.input.SetFocus()`` here: the user
+        # either was already in the input (typed + Enter, focus never
+        # moved) or navigated to an older message with Ctrl+Up/Down to
+        # re-read it. In the first case SetFocus is a no-op on screen
+        # but still fires a VoiceOver focus cue ("Nachrichteneingabe")
+        # that barges in and truncates our own ``announce(text)``. In
+        # the second case SetFocus yanks the user off a message they
+        # wanted to read. Leaving focus where it is covers both.
         if self._announcer is not None:
             if aborted:
-                self._announcer.announce(t("say.cancelled"))
+                self._announcer.announce(t("say.cancelled"), interrupt=True)
             else:
-                # First the status cue ("Antwort empfangen"), then the
-                # assistant's actual reply — queued so both play back
-                # to back without cutting the content.
-                self._announcer.announce(t("say.msg_received"))
-                self._announcer.announce(text)
-        self.input.SetFocus()
+                # Speak the reply directly with interrupt=True so any
+                # lingering "Assistant denkt nach" speech gets cut off.
+                # The receive chime + status line already act as the
+                # "message received" cue — two back-to-back announce
+                # calls (cue + body) were dropping the body on macOS
+                # VoiceOver, which coalesces rapid output() calls.
+                self._announcer.announce(text, interrupt=True)
 
     def _on_generation_error(self, err: Exception) -> None:
         self._sounds.stop_typing()

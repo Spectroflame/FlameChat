@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from ..i18n import t
 from .ollama_manager import app_data_dir
 
 
@@ -102,63 +103,41 @@ def ingest(src: Path, chat_id: str) -> Attachment:
     """Validate size + type, copy into app data dir, return an Attachment."""
     src = src.expanduser().resolve()
     if not src.exists():
-        raise AttachmentError(
-            f"Die Datei „{src.name}“ scheint nicht mehr zu existieren.\n"
-            "Möglicherweise wurde sie inzwischen verschoben oder gelöscht. "
-            "Bitte wähle die Datei neu aus."
-        )
+        raise AttachmentError(t("attach.missing", name=src.name))
     if not src.is_file():
-        raise AttachmentError(
-            f"„{src.name}“ ist keine Datei, sondern ein Verzeichnis oder "
-            "Symlink. Bitte wähle eine einzelne Datei aus."
-        )
+        raise AttachmentError(t("attach.not_a_file", name=src.name))
     size = src.stat().st_size
     if size == 0:
-        raise AttachmentError(
-            f"Die Datei „{src.name}“ ist leer (0 Byte). Es gibt nichts zu "
-            "analysieren oder zu beschreiben. Prüfe den Export deines "
-            "Programms und wähle die Datei neu aus."
-        )
+        raise AttachmentError(t("attach.empty", name=src.name))
     if size > MAX_FILE_SIZE_BYTES:
-        mb = size / (1024 ** 2)
-        cap_mb = MAX_FILE_SIZE_BYTES / (1024 ** 2)
         raise AttachmentError(
-            f"Die Datei „{src.name}“ ist {mb:.1f} MB groß und liegt damit "
-            f"über dem Limit von {cap_mb:.0f} MB.\n\n"
-            "Dieses Limit besteht, damit das Modell und dein Rechner die "
-            "Datei noch sinnvoll verarbeiten können. Vorschläge:\n"
-            " • Kürze das Audio auf den relevanten Abschnitt.\n"
-            " • Exportiere Bilder mit geringerer Auflösung.\n"
-            " • Konvertiere Audio in ein verlustbehaftetes Format wie MP3 oder Opus."
+            t(
+                "attach.too_big",
+                name=src.name,
+                mb=size / (1024 ** 2),
+                cap=MAX_FILE_SIZE_BYTES / (1024 ** 2),
+            )
         )
     kind = classify(src)
     # Text files are additionally capped at a stricter per-file limit
     # because they go straight into the model's context window.
     if kind == "text" and size > MAX_TEXT_SIZE_BYTES:
-        kb = size / 1024
-        cap_kb = MAX_TEXT_SIZE_BYTES / 1024
         raise AttachmentError(
-            f"Die Textdatei „{src.name}“ ist {kb:.0f} KB groß — mehr als "
-            f"das Kontextfenster eines lokalen Modells sinnvoll aufnehmen "
-            f"kann (Limit: {cap_kb:.0f} KB).\n\n"
-            "Teile die Datei in kleinere Abschnitte und hänge den für dich "
-            "relevanten Teil an, oder fasse den Inhalt mit einem anderen "
-            "Werkzeug vorher zusammen."
+            t(
+                "attach.text_too_big",
+                name=src.name,
+                kb=size / 1024,
+                cap=MAX_TEXT_SIZE_BYTES / 1024,
+            )
         )
     if kind == "unsupported":
-        img = ", ".join(sorted(s.lstrip('.') for s in IMAGE_SUFFIXES))
-        aud = ", ".join(sorted(s.lstrip('.') for s in AUDIO_SUFFIXES))
         raise AttachmentError(
-            f"„{src.name}“ hat einen Dateityp, den FlameChat nicht lesen "
-            f"kann.\n\n"
-            f"Unterstützt werden:\n"
-            f" • Bilder: {img}\n"
-            f" • Audio: {aud}\n"
-            f" • Text / Code: .txt, .md, .json, .yaml, .xml, .html, .csv sowie "
-            "die meisten Programmier-Quelldateien (.py, .js, .ts, .c/.cpp, "
-            ".rs, .go, .java, .rb, .sh …)\n\n"
-            "Konvertiere die Datei in eines dieser Formate (zum Beispiel "
-            "mit Vorschau / Quicktime / Audacity) und versuche es erneut."
+            t(
+                "attach.unsupported",
+                name=src.name,
+                img=", ".join(sorted(s.lstrip(".") for s in IMAGE_SUFFIXES)),
+                aud=", ".join(sorted(s.lstrip(".") for s in AUDIO_SUFFIXES)),
+            )
         )
 
     target_dir = app_data_dir() / "attachments" / chat_id

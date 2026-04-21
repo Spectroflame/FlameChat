@@ -33,6 +33,8 @@ from typing import Callable
 
 import httpx
 
+from ..i18n import t
+
 
 APP_NAME = "FlameChat"
 OLLAMA_PORT = 11434
@@ -101,43 +103,27 @@ class OllamaManager:
         progress callbacks back to the UI.
         """
         if self.is_serving():
-            on_progress("Ollama ist bereits aktiv", 1, 1)
+            on_progress(t("ollama.progress.already_running"), 1, 1)
             return
 
         system = self.detect_system_install()
         if system is None:
-            on_progress("Ollama wird installiert …", 0, 1)
+            on_progress(t("ollama.progress.install_running"), 0, 1)
             try:
                 system = self._install_system(on_progress)
             except Exception as e:  # noqa: BLE001 — surface any install failure
                 raise OllamaUnavailable(
-                    "FlameChat konnte Ollama nicht automatisch installieren.\n\n"
-                    f"Technische Details: {e}\n\n"
-                    "So kommst du trotzdem weiter:\n"
-                    " • Prüfe deine Internetverbindung und versuche es erneut.\n"
-                    " • Oder installiere Ollama von Hand: "
-                    "https://ollama.com/download — danach startet FlameChat "
-                    "beim nächsten Öffnen automatisch."
+                    t("ollama.install.failed_body", err=e)
                 ) from e
             if system is None:
-                raise OllamaUnavailable(
-                    "Die Ollama-Installation wurde durchgeführt, aber FlameChat "
-                    "konnte sie anschließend nicht finden.\n\n"
-                    "Das sollte normalerweise nicht passieren. Versuche, "
-                    "FlameChat neu zu starten. Bleibt das Problem bestehen, "
-                    "installiere Ollama von Hand über https://ollama.com/download."
-                )
+                raise OllamaUnavailable(t("ollama.install.not_found_after"))
 
-        on_progress("Starte Ollama …", 0, 1)
+        on_progress(t("ollama.progress.starting"), 0, 1)
         try:
             self._launch_system(system)
         except Exception as e:  # noqa: BLE001
             raise OllamaUnavailable(
-                "Ollama ist zwar installiert, konnte aber nicht gestartet werden.\n\n"
-                f"Technische Details: {e}\n\n"
-                "Versuche Ollama.app manuell aus dem Programme-Ordner zu "
-                "starten (auf dem Mac) bzw. Ollama aus dem Startmenü (Windows) "
-                "und öffne dann FlameChat erneut."
+                t("ollama.install.launch_failed", err=e)
             ) from e
         self._wait_ready(on_progress)
 
@@ -208,7 +194,7 @@ class OllamaManager:
         with tempfile.TemporaryDirectory(prefix="flamechat-ollama-") as tmp:
             dmg_path = Path(tmp) / "Ollama.dmg"
             self._download(DMG_URL, dmg_path, on_progress)
-            on_progress("Entpacke Ollama-DMG …", 0, 1)
+            on_progress(t("ollama.progress.extract_dmg"), 0, 1)
             mount = subprocess.check_output(
                 ["hdiutil", "attach", "-nobrowse", "-readonly", str(dmg_path)],
                 text=True,
@@ -219,7 +205,7 @@ class OllamaManager:
                 target = Path("/Applications/Ollama.app")
                 if target.exists():
                     shutil.rmtree(target)
-                on_progress("Kopiere Ollama nach /Applications …", 0, 1)
+                on_progress(t("ollama.progress.copy_to_applications"), 0, 1)
                 shutil.copytree(src, target, symlinks=True)
             finally:
                 subprocess.run(
@@ -230,7 +216,7 @@ class OllamaManager:
         with tempfile.TemporaryDirectory(prefix="flamechat-ollama-") as tmp:
             exe_path = Path(tmp) / "OllamaSetup.exe"
             self._download(WINDOWS_INSTALLER_URL, exe_path, on_progress)
-            on_progress("Starte Ollama-Installer …", 0, 1)
+            on_progress(t("ollama.progress.win_installer"), 0, 1)
             # `/SILENT` suppresses the UI; `/NORESTART` keeps us in control.
             subprocess.check_call([str(exe_path), "/SILENT", "/NORESTART"])
 
@@ -239,7 +225,7 @@ class OllamaManager:
             script_path = Path(tmp) / "install.sh"
             self._download(LINUX_INSTALL_SCRIPT_URL, script_path, on_progress)
             script_path.chmod(0o755)
-            on_progress("Starte Ollama-Installations-Skript …", 0, 1)
+            on_progress(t("ollama.progress.linux_script"), 0, 1)
             # The Ollama install script uses sudo internally; we run it
             # interactively so the password prompt reaches the user.
             subprocess.check_call(["sh", str(script_path)])
@@ -250,7 +236,7 @@ class OllamaManager:
             parts = line.split("\t")
             if len(parts) >= 3 and parts[-1].startswith("/Volumes/"):
                 return Path(parts[-1].strip())
-        raise OllamaUnavailable("hdiutil attach produced no mount point.")
+        raise OllamaUnavailable(t("ollama.install.no_mount"))
 
     # --- launch -----------------------------------------------------------
     def _launch_system(self, system: SystemOllama) -> None:
@@ -290,21 +276,12 @@ class OllamaManager:
         deadline = time.time() + READY_TIMEOUT_S
         while time.time() < deadline:
             if self.is_serving():
-                on_progress("Bereit", 1, 1)
+                on_progress(t("ollama.progress.ready"), 1, 1)
                 return
-            on_progress("Warte, bis Ollama bereit ist …", 0, 1)
+            on_progress(t("ollama.progress.waiting"), 0, 1)
             time.sleep(0.4)
         raise OllamaUnavailable(
-            f"Ollama wurde gestartet, antwortet aber nach {int(READY_TIMEOUT_S)} "
-            "Sekunden immer noch nicht.\n\n"
-            "Möglicherweise ist ein anderes Programm auf Port 11434 aktiv, "
-            "oder Ollama hängt beim ersten Start.\n\n"
-            "Versuche Folgendes:\n"
-            " • Beende FlameChat und andere Ollama-Instanzen, dann neu starten.\n"
-            " • Prüfe im Terminal mit `lsof -iTCP:11434 -sTCP:LISTEN`, "
-            "welcher Prozess den Port belegt.\n"
-            " • Starte Ollama.app manuell aus dem Programme-Ordner und "
-            "öffne FlameChat erneut."
+            t("ollama.ready_timeout", timeout=int(READY_TIMEOUT_S))
         )
 
     # --- download primitive ----------------------------------------------

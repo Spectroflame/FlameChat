@@ -26,7 +26,7 @@ from .. import APP_NAME, __version__
 from ..backend.hardware import HardwareProfile
 from ..backend.ollama_client import OllamaClient
 from ..backend.settings import Settings, SettingsStore
-from ..i18n import LANGUAGE_NAMES, Language, t
+from ..i18n import LANGUAGE_NAMES, Language, resolve_language, t
 from .models_panel import ModelsPanel
 from .sounds import SoundBoard
 from .theme import apply_theme
@@ -164,14 +164,26 @@ class _GeneralTab(wx.Panel):
         self._add_note(sizer, t("prefs.general.theme_note"))
 
         # --- language ---
+        # "auto" sits at the front of the picker so the first thing a
+        # user sees on launch is "match the OS language" — that's what
+        # almost everyone wants. The resolved label (e.g. "Automatisch
+        # (Deutsch)") tells them which concrete language auto-detect
+        # picked, so the choice is never opaque.
         lang_row = wx.BoxSizer(wx.HORIZONTAL)
         lang_label = wx.StaticText(self, label=t("prefs.general.language_label"))
-        self._lang_codes: list[Language] = ["de", "en"]
+        self._lang_codes: list[str] = ["auto", "de", "en"]
+        auto_label = t(
+            "prefs.general.language_auto",
+            detected=LANGUAGE_NAMES[resolve_language("auto")],
+        )
         self.lang_choice = wx.Choice(
-            self, choices=[LANGUAGE_NAMES[c] for c in self._lang_codes]
+            self,
+            choices=[auto_label] + [LANGUAGE_NAMES[c] for c in ("de", "en")],
         )
         self.lang_choice.SetName(t("prefs.general.language_name"))
-        current = settings.language if settings.language in self._lang_codes else "en"
+        current = (
+            settings.language if settings.language in self._lang_codes else "auto"
+        )
         self.lang_choice.SetSelection(self._lang_codes.index(current))
         lang_row.Add(lang_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
         lang_row.Add(self.lang_choice, 0, wx.ALIGN_CENTER_VERTICAL)
@@ -246,7 +258,7 @@ class _GeneralTab(wx.Panel):
         idx = self.lang_choice.GetSelection()
         if idx == wx.NOT_FOUND:
             return
-        self._settings.language = self._lang_codes[idx]
+        self._settings.language = self._lang_codes[idx]  # "auto", "de" or "en"
         self._store.save(self._settings)
 
     def _on_num_predict_changed(self, _event) -> None:

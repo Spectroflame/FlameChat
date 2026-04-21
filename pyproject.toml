@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flamechat"
-version = "0.1.0"
+version = "0.2.0"
 description = "Accessible, fully local AI chat client (wxPython + Ollama)"
 requires-python = ">=3.10"
 readme = "README.md"
@@ -22,6 +22,11 @@ dependencies = [
     "scipy>=1.11",
     "numpy>=1.26",
     "pyloudnorm>=0.1.1",
+    # In-process audio playback so the UI sounds (send, receive, typing
+    # loop) start instantly and loop seamlessly. PortAudio is bundled
+    # with the macOS / Windows wheels; on Linux the distro package
+    # ``libportaudio2`` is usually already present.
+    "sounddevice>=0.4.6",
 ]
 
 [project.scripts]
@@ -31,4 +36,4 @@ flamechat = "flamechat.__main__:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-flamechat = ["assets/*.wav"]
+flamechat = ["assets/*.wav", "locale/*.json"]

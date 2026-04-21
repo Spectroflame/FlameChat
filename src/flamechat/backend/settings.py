@@ -32,9 +32,10 @@ class Settings:
     # user deletes the last existing chat. Power users can turn this off
     # to get an empty chat panel in those cases.
     auto_create_chat: bool = True
-    # UI language: "de" or "en". Changes require an app restart.
-    # English is the default; switch to German manually in Preferences.
-    language: str = "en"
+    # UI language: "auto" (follow the OS UI language), "de" or "en".
+    # Changes require an app restart. ``auto`` is the default so the
+    # first-launch experience is native wherever FlameChat runs.
+    language: str = "auto"
     # Upper bound passed to Ollama as num_predict. Gives the progress
     # percentage a meaningful denominator — the model stops earlier if
     # it is actually finished. Modern models can context much more than
@@ -68,7 +69,7 @@ class SettingsStore:
             return Settings()
         defaults = Settings()
         lang = str(data.get("language", defaults.language))
-        if lang not in ("de", "en"):
+        if lang not in ("auto", "de", "en"):
             lang = defaults.language
         whisper_model = str(data.get("whisper_model", defaults.whisper_model))
         if whisper_model not in ("tiny", "base", "small", "medium", "large-v3"):

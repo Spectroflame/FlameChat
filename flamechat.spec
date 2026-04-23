@@ -60,6 +60,11 @@ a = Analysis(
         # are picked up via normal Python imports; no data file needed.
         (str(SRC / "flamechat" / "assets" / "send.wav"), "flamechat/assets"),
         (str(SRC / "flamechat" / "assets" / "receive.wav"), "flamechat/assets"),
+        # Translation tables. i18n.py reads these at runtime via
+        # ``importlib.resources`` — without this line every t() call in a
+        # packaged build falls through to returning the raw key, so the UI
+        # renders labels like "list.new_chat" instead of "+ New chat".
+        (str(SRC / "flamechat" / "locale"), "flamechat/locale"),
     ] + collected_datas,
     hiddenimports=["wx.adv"] + collected_hiddenimports,
     hookspath=[],
